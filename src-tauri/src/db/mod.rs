@@ -94,6 +94,11 @@ impl DbManager {
         })
     }
 
+    /// Acquire mutex guard to underlying SQLite connection
+    pub fn conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, DbError> {
+        self.conn.lock().map_err(|_| DbError::PoisonedLock)
+    }
+
     /// Expose path
     pub fn path(&self) -> &PathBuf {
         &self.path

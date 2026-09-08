@@ -19,6 +19,54 @@ pub static MIGRATIONS: &[Migration] = &[
             INSERT OR IGNORE INTO app_metadata (key, value) VALUES ('initialized_at', datetime('now'));
         ",
     },
+    Migration {
+        version: 2,
+        name: "project_and_artifact_core",
+        sql: "
+            CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS artifacts (
+                id TEXT PRIMARY KEY,
+                sha256 TEXT NOT NULL UNIQUE,
+                kind TEXT NOT NULL,
+                mime_type TEXT,
+                size_bytes INTEGER NOT NULL,
+                storage_key TEXT NOT NULL UNIQUE,
+                original_filename TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS artifact_media_metadata (
+                artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+                probe_status TEXT NOT NULL,
+                duration_ms INTEGER,
+                width INTEGER,
+                height INTEGER,
+                video_codec TEXT,
+                audio_codec TEXT,
+                frame_rate REAL,
+                sample_rate INTEGER,
+                channels INTEGER,
+                probe_error TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS project_artifacts (
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+                added_at TEXT NOT NULL,
+                PRIMARY KEY(project_id, artifact_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_artifacts_sha256 ON artifacts(sha256);
+            CREATE INDEX IF NOT EXISTS idx_project_artifacts_project ON project_artifacts(project_id);
+        ",
+    },
 ];
 
 pub fn run_all_migrations(conn: &mut Connection) -> Result<(), rusqlite::Error> {
