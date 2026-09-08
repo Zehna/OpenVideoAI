@@ -1,5 +1,6 @@
 pub mod db;
 pub mod logging;
+pub mod tools;
 
 pub fn run() {
     // Initialize structured logging on application launch
