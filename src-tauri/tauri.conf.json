@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "OpenVideoAI Studio",
         "width": 1000,
         "height": 720,

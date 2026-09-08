@@ -17,5 +17,7 @@ pub fn parse_tool_version(tool_name: &str, output: &str) -> Option<String> {
         _ => return None,
     };
 
-    re.captures(output).and_then(|caps| caps.get(1)).map(|m| m.as_str().to_string())
+    re.captures(output)
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str().to_string())
 }

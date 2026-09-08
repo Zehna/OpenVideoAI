@@ -25,7 +25,10 @@ fn test_parse_ffprobe_version() {
 #[test]
 fn test_parse_invalid_version_output() {
     assert_eq!(parse_tool_version("ffmpeg", ""), None);
-    assert_eq!(parse_tool_version("ffmpeg", "Some random error or unrelated banner"), None);
+    assert_eq!(
+        parse_tool_version("ffmpeg", "Some random error or unrelated banner"),
+        None
+    );
     assert_eq!(parse_tool_version("ffprobe", "unrecognized program"), None);
 }
 

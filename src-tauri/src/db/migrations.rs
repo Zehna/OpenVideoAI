@@ -49,7 +49,11 @@ pub fn run_all_migrations(conn: &mut Connection) -> Result<(), rusqlite::Error> 
             let tx = conn.transaction()?;
             apply_migration(&tx, migration)?;
             tx.commit()?;
-            tracing::info!(version = migration.version, name = migration.name, "Applied database migration");
+            tracing::info!(
+                version = migration.version,
+                name = migration.name,
+                "Applied database migration"
+            );
         }
     }
 
