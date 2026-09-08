@@ -1,4 +1,5 @@
 pub mod local_store;
+pub mod recovery;
 pub mod staging;
 
 use std::path::PathBuf;

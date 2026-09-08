@@ -44,6 +44,7 @@ pub fn run() {
 
             let artifacts_dir = app_data_dir.join("artifacts");
             let staging_dir = app_data_dir.join("staging");
+            let _ = storage::recovery::sweep_staging_directory(&staging_dir);
             let local_store = Arc::new(storage::local_store::LocalStore::new(artifacts_dir));
 
             let health_service = health::HealthService::new(db_manager.clone());
