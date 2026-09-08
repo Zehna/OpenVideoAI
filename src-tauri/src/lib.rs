@@ -1,7 +1,9 @@
+pub mod artifacts;
 pub mod db;
 pub mod health;
 pub mod logging;
 pub mod projects;
+pub mod storage;
 pub mod tools;
 
 use std::sync::Arc;
