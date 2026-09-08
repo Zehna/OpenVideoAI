@@ -18,7 +18,7 @@ function Check-Result {
 
 $startTime = Get-Date
 
-Write-Host "Starting OpenVideoAI Phase 0 Quality Gates..." -ForegroundColor Magenta
+Write-Host "Starting OpenVideoAI Phase 1 Quality Gates..." -ForegroundColor Magenta
 
 # 1. Frontend Typecheck
 Write-Step "1/6: Frontend TypeScript Check (npm run typecheck)"
@@ -41,8 +41,8 @@ cargo fmt --manifest-path src-tauri/Cargo.toml --check
 Check-Result "Rust Formatting Check"
 
 # 5. Backend Rust Clippy Lints (Zero Warnings)
-Write-Step "5/6: Rust Clippy Lints (cargo clippy -- -D warnings)"
-cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+Write-Step "5/6: Rust Clippy Lints (cargo clippy --all-targets -- -D warnings)"
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 Check-Result "Rust Clippy Check"
 
 # 6. Backend Rust Unit & Integration Tests
@@ -52,6 +52,6 @@ Check-Result "Backend Tests"
 
 $elapsed = (Get-Date) - $startTime
 Write-Host "`n========================================================" -ForegroundColor Green
-Write-Host " ALL PHASE 0 QUALITY GATES PASSED in $($elapsed.TotalSeconds.ToString("F1"))s" -ForegroundColor Green
+Write-Host " ALL PHASE 1 QUALITY GATES PASSED in $($elapsed.TotalSeconds.ToString("F1"))s" -ForegroundColor Green
 Write-Host "========================================================`n" -ForegroundColor Green
 exit 0
