@@ -1,5 +1,6 @@
 pub mod artifacts;
 pub mod db;
+pub mod events;
 pub mod health;
 pub mod jobs;
 pub mod logging;
