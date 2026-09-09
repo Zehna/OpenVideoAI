@@ -86,14 +86,18 @@ fn test_migration_3_schema_and_foreign_keys() {
          VALUES ('job-2', 'test_task', 'queued', 5, 'key-123', '{\"test\":false}', datetime('now'), datetime('now'));",
         [],
     );
-    assert!(duplicate_res.is_err(), "Duplicate idempotency key should violate UNIQUE constraint");
+    assert!(
+        duplicate_res.is_err(),
+        "Duplicate idempotency key should violate UNIQUE constraint"
+    );
 
     // Insert checkpoint
     conn.execute(
         "INSERT INTO job_checkpoints (id, job_id, stage, checkpoint_data, created_at)
          VALUES ('cp-1', 'job-1', 'extraction', '{\"progress\":50}', datetime('now'));",
         [],
-    ).expect("insert checkpoint failed");
+    )
+    .expect("insert checkpoint failed");
 
     // Checkpoint with non-existent job must fail foreign key
     let invalid_cp = conn.execute(
@@ -101,12 +105,16 @@ fn test_migration_3_schema_and_foreign_keys() {
          VALUES ('cp-2', 'non-existent-job', 'stage1', '{}', datetime('now'));",
         [],
     );
-    assert!(invalid_cp.is_err(), "Foreign key constraint on job_id must be enforced");
+    assert!(
+        invalid_cp.is_err(),
+        "Foreign key constraint on job_id must be enforced"
+    );
 
     // Insert domain event
     conn.execute(
         "INSERT INTO domain_events (id, event_type, version, job_id, payload, created_at)
          VALUES ('evt-1', 'JobCreated', 1, 'job-1', '{\"name\":\"test\"}', datetime('now'));",
         [],
-    ).expect("insert domain event failed");
+    )
+    .expect("insert domain event failed");
 }
