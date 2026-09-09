@@ -16,6 +16,8 @@ pub struct AppState {
     pub project_service: Arc<projects::service::ProjectService>,
     pub artifact_importer: Arc<artifacts::importer::ArtifactImporter>,
     pub artifact_resolver: Arc<artifacts::resolver::ArtifactResolver>,
+    pub job_manager: Arc<jobs::manager::JobManager>,
+    pub event_bus: Arc<events::bus::EventBus>,
 }
 
 #[tauri::command]
@@ -58,15 +60,27 @@ pub fn run() {
                 staging_dir,
             ));
             let artifact_resolver = Arc::new(artifacts::resolver::ArtifactResolver::new(
-                db_manager,
+                db_manager.clone(),
                 local_store,
             ));
+            let job_manager = Arc::new(jobs::manager::JobManager::new(db_manager.clone()));
+            let _ = job_manager.reap_expired_leases();
+            let event_bus = Arc::new(events::bus::EventBus::new(db_manager));
+
+            // Bridge domain events to frontend webview
+            let app_handle = app.handle().clone();
+            event_bus.subscribe(Arc::new(move |evt| {
+                use tauri::Emitter;
+                let _ = app_handle.emit("domain-event", evt);
+            }));
 
             app.manage(AppState {
                 health_service,
                 project_service,
                 artifact_importer,
                 artifact_resolver,
+                job_manager,
+                event_bus,
             });
 
             Ok(())
@@ -78,7 +92,13 @@ pub fn run() {
             projects::commands::get_project,
             projects::commands::update_project,
             artifacts::commands::import_artifact,
-            artifacts::commands::list_project_artifacts
+            artifacts::commands::list_project_artifacts,
+            jobs::commands::submit_job,
+            jobs::commands::get_job,
+            jobs::commands::cancel_job,
+            jobs::commands::list_jobs,
+            jobs::commands::get_job_checkpoints,
+            events::commands::list_events
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
