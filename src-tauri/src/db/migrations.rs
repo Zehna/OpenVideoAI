@@ -67,6 +67,58 @@ pub static MIGRATIONS: &[Migration] = &[
             CREATE INDEX IF NOT EXISTS idx_project_artifacts_project ON project_artifacts(project_id);
         ",
     },
+    Migration {
+        version: 3,
+        name: "durable_jobs_and_events",
+        sql: "
+            CREATE TABLE IF NOT EXISTS jobs (
+                id TEXT PRIMARY KEY,
+                job_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 0,
+                idempotency_key TEXT UNIQUE,
+                project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+                payload TEXT NOT NULL,
+                result TEXT,
+                error TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                max_retries INTEGER NOT NULL DEFAULT 3,
+                leased_by TEXT,
+                lease_expires_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_jobs_status_priority ON jobs(status, priority DESC, created_at ASC);
+            CREATE INDEX IF NOT EXISTS idx_jobs_project_id ON jobs(project_id);
+            CREATE INDEX IF NOT EXISTS idx_jobs_idempotency_key ON jobs(idempotency_key);
+
+            CREATE TABLE IF NOT EXISTS job_checkpoints (
+                id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                stage TEXT NOT NULL,
+                checkpoint_data TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_job_checkpoints_job_id ON job_checkpoints(job_id, created_at ASC);
+
+            CREATE TABLE IF NOT EXISTS domain_events (
+                id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1,
+                project_id TEXT,
+                job_id TEXT,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_domain_events_type_created ON domain_events(event_type, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_domain_events_job_id ON domain_events(job_id);
+        ",
+    },
 ];
 
 pub fn run_all_migrations(conn: &mut Connection) -> Result<(), rusqlite::Error> {
