@@ -3,11 +3,12 @@ import "./App.css";
 import { HealthDashboard } from "../features/health/HealthDashboard";
 import { ProjectList } from "../features/projects/components/ProjectList";
 import { ProjectDetail } from "../features/projects/components/ProjectDetail";
+import { JobList } from "../features/jobs/components/JobList";
 import { listProjects, createProject } from "../features/projects/api";
 import type { Project } from "../features/projects/types";
 
 export const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<"projects" | "health">("projects");
+  const [activeTab, setActiveTab] = useState<"projects" | "jobs" | "health">("projects");
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -52,7 +53,7 @@ export const App: React.FC = () => {
               OpenVideoAI
             </span>
             <span className="text-[10px] font-mono uppercase bg-indigo-950/80 text-indigo-400 px-2 py-0.5 rounded border border-indigo-800/60 ml-2">
-              Phase 1 Core
+              Phase 2 Jobs & Events
             </span>
           </div>
 
@@ -68,6 +69,16 @@ export const App: React.FC = () => {
               }`}
             >
               Projects
+            </button>
+            <button
+              onClick={() => setActiveTab("jobs")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors ${
+                activeTab === "jobs"
+                  ? "bg-gray-800 text-indigo-300 font-semibold"
+                  : "text-gray-400 hover:text-gray-200"
+              }`}
+            >
+              Jobs & Queue
             </button>
             <button
               onClick={() => setActiveTab("health")}
@@ -87,6 +98,8 @@ export const App: React.FC = () => {
       <main className="flex-1 py-4">
         {activeTab === "health" ? (
           <HealthDashboard />
+        ) : activeTab === "jobs" ? (
+          <JobList />
         ) : selectedProject ? (
           <ProjectDetail
             project={selectedProject}

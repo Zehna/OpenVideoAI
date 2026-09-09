@@ -9,6 +9,9 @@ pub enum JobError {
     #[error("Database error: {0}")]
     Db(#[from] rusqlite::Error),
 
+    #[error("Database manager error: {0}")]
+    DbManager(#[from] crate::db::DbError),
+
     #[error("Job not found: {0}")]
     NotFound(String),
 
