@@ -394,3 +394,218 @@ fn test_payload_version_persistence_and_defaults() {
     let retrieved = manager.get_job(&job_v2.id).expect("get").expect("exists");
     assert_eq!(retrieved.payload_version, 2);
 }
+
+#[test]
+fn test_repeated_lease_expiry_cannot_loop_past_max_retries() {
+    let (_dir, db, event_bus) = setup_test_system();
+    let manager = JobManager::with_worker_and_event_bus(
+        db.clone(),
+        event_bus.clone(),
+        "worker-test".to_string(),
+    );
+
+    // Job with max_retries = 2 (can attempt 1 initial + 2 retries = 3 attempts total)
+    let job = manager
+        .submit_job(JobSubmission {
+            job_type: "finite_retry_task".to_string(),
+            payload: "{}".to_string(),
+            payload_version: Some(1),
+            priority: Some(10),
+            idempotency_key: None,
+            project_id: None,
+            max_retries: Some(2),
+        })
+        .expect("submit");
+
+    // Attempt 1: Acquire lease (for 1 second)
+    let leased_1 = manager
+        .acquire_next_job(1)
+        .expect("acquire 1")
+        .expect("leased 1");
+    assert_eq!(leased_1.id, job.id);
+    assert_eq!(leased_1.retry_count, 0);
+
+    // Sleep to expire Attempt 1
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+
+    // Direct acquire_lease without reaper MUST return None (cannot bypass reaper/retry counting)
+    {
+        let conn = db.conn().expect("conn");
+        let direct = openvideoai_lib::jobs::repository::JobRepository::acquire_lease(
+            &conn,
+            "worker-test",
+            10,
+        )
+        .expect("acquire");
+        assert!(
+            direct.is_none(),
+            "Expired running job cannot be directly acquired without reaper"
+        );
+    }
+
+    // Reaper reaps Attempt 1 -> retry_count becomes 1, status = retryable
+    let reaped_1 = manager.reap_expired_leases().expect("reap 1");
+    assert_eq!(reaped_1, 1);
+    let job_after_1 = manager.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(job_after_1.status, JobState::Retryable);
+    assert_eq!(job_after_1.retry_count, 1);
+
+    // Attempt 2: Acquire lease (for 1 second)
+    let leased_2 = manager
+        .acquire_next_job(1)
+        .expect("acquire 2")
+        .expect("leased 2");
+    assert_eq!(leased_2.id, job.id);
+    assert_eq!(leased_2.retry_count, 1);
+
+    // Sleep to expire Attempt 2
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+
+    // Direct acquire_lease again MUST return None
+    {
+        let conn = db.conn().expect("conn");
+        let direct = openvideoai_lib::jobs::repository::JobRepository::acquire_lease(
+            &conn,
+            "worker-test",
+            10,
+        )
+        .expect("acquire");
+        assert!(direct.is_none());
+    }
+
+    // Reaper reaps Attempt 2 -> retry_count becomes 2, status = retryable
+    let reaped_2 = manager.reap_expired_leases().expect("reap 2");
+    assert_eq!(reaped_2, 1);
+    let job_after_2 = manager.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(job_after_2.status, JobState::Retryable);
+    assert_eq!(job_after_2.retry_count, 2);
+
+    // Attempt 3: Acquire lease (for 1 second)
+    let leased_3 = manager
+        .acquire_next_job(1)
+        .expect("acquire 3")
+        .expect("leased 3");
+    assert_eq!(leased_3.id, job.id);
+    assert_eq!(leased_3.retry_count, 2);
+
+    // Sleep to expire Attempt 3
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+
+    // Direct acquire_lease again MUST return None
+    {
+        let conn = db.conn().expect("conn");
+        let direct = openvideoai_lib::jobs::repository::JobRepository::acquire_lease(
+            &conn,
+            "worker-test",
+            10,
+        )
+        .expect("acquire");
+        assert!(direct.is_none());
+    }
+
+    // Reaper reaps Attempt 3 -> retry_count (2) == max_retries (2) -> DEAD LETTER!
+    let reaped_3 = manager.reap_expired_leases().expect("reap 3");
+    assert_eq!(reaped_3, 1);
+    let job_final = manager.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(
+        job_final.status,
+        JobState::DeadLetter,
+        "Job must transition to dead_letter once max_retries is reached"
+    );
+    assert_eq!(job_final.retry_count, 2);
+    assert!(job_final.completed_at.is_some());
+
+    // Subsequent acquisitions must find NO jobs (cannot loop infinitely)
+    let next = manager.acquire_next_job(10).expect("acquire next");
+    assert!(
+        next.is_none(),
+        "Dead letter job must never be acquired again"
+    );
+}
+
+#[test]
+fn test_expired_lease_token_fencing_without_reaper() {
+    let (_dir, db, event_bus) = setup_test_system();
+    let manager = JobManager::with_worker_and_event_bus(
+        db.clone(),
+        event_bus.clone(),
+        "worker-alpha".to_string(),
+    );
+
+    let job = manager
+        .submit_job(JobSubmission {
+            job_type: "lease_fence_task".to_string(),
+            payload: "{}".to_string(),
+            payload_version: Some(1),
+            priority: Some(5),
+            idempotency_key: None,
+            project_id: None,
+            max_retries: Some(3),
+        })
+        .expect("submit");
+
+    // Worker Alpha acquires lease for 1 second
+    let leased = manager
+        .acquire_next_job(1)
+        .expect("acquire")
+        .expect("leased");
+    let token = leased.lease_token.expect("lease token");
+
+    // Wait for lease to expire (1.2 seconds)
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+
+    // CRITICAL: We do NOT run the reaper! Status in DB is still 'running', and lease_token matches.
+    // However, lease_expires_at has passed. All operations by Worker Alpha MUST be rejected!
+
+    // 1. Heartbeat must fail and not extend the lease
+    let hb_result = manager
+        .heartbeat_with_token(&job.id, Some(&token), 60)
+        .expect("heartbeat");
+    assert!(
+        !hb_result,
+        "Heartbeat must return false when lease has expired"
+    );
+
+    // 2. Checkpoint must be rejected
+    let cp_result = manager.record_checkpoint_with_token(&job.id, Some(&token), "stage_1", "{}");
+    assert!(
+        matches!(
+            cp_result,
+            Err(openvideoai_lib::jobs::JobError::StaleLease(_))
+        ),
+        "Checkpoint with expired lease must return StaleLease: {:?}",
+        cp_result
+    );
+
+    // 3. Complete must be rejected
+    let complete_result =
+        manager.complete_job_with_token(&job.id, Some(&token), Some("{}".to_string()));
+    assert!(
+        matches!(
+            complete_result,
+            Err(openvideoai_lib::jobs::JobError::StaleLease(_))
+        ),
+        "Completion with expired lease must return StaleLease: {:?}",
+        complete_result
+    );
+
+    // 4. Fail must be rejected
+    let fail_result = manager.fail_job_with_token(&job.id, Some(&token), "Late crash", true);
+    assert!(
+        matches!(
+            fail_result,
+            Err(openvideoai_lib::jobs::JobError::StaleLease(_))
+        ),
+        "Failure with expired lease must return StaleLease: {:?}",
+        fail_result
+    );
+
+    // 5. Verify the job was NOT silently revived or completed
+    let current_job = manager.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(
+        current_job.status,
+        JobState::Running,
+        "Status must remain unmodified by expired worker"
+    );
+    assert!(current_job.completed_at.is_none());
+}

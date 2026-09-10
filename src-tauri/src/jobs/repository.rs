@@ -184,7 +184,6 @@ impl JobRepository {
                 .query_row(
                     "SELECT id FROM jobs 
                      WHERE status = 'queued' 
-                        OR (status = 'running' AND lease_expires_at < ?1) 
                         OR (status = 'retryable' AND updated_at <= ?1)
                      ORDER BY priority DESC, created_at ASC 
                      LIMIT 1",
@@ -199,7 +198,8 @@ impl JobRepository {
 
             let lease_token = uuid::Uuid::new_v4().to_string();
 
-            // Atomic CAS update: only update if the job remains in runnable/expired state
+            // Atomic CAS update: only update if the job remains in runnable state (queued or retryable).
+            // Expired running jobs must be reclaimed via reap_expired_leases to ensure retry accounting.
             let rows_affected = conn.execute(
                 "UPDATE jobs 
                  SET status = 'running', 
@@ -210,7 +210,6 @@ impl JobRepository {
                      updated_at = ?4 
                  WHERE id = ?5 AND (
                      status = 'queued' 
-                     OR (status = 'running' AND lease_expires_at < ?4) 
                      OR (status = 'retryable' AND updated_at <= ?4)
                  )",
                 params![worker_id, lease_token, lease_expires_at, now, job_id],
@@ -250,7 +249,7 @@ impl JobRepository {
         let lease_expires_at =
             (now_dt + chrono::Duration::seconds(lease_duration_secs)).to_rfc3339();
 
-        let mut query = "UPDATE jobs SET lease_expires_at = ?1, updated_at = ?2 WHERE id = ?3 AND leased_by = ?4 AND status = 'running'".to_string();
+        let mut query = "UPDATE jobs SET lease_expires_at = ?1, updated_at = ?2 WHERE id = ?3 AND leased_by = ?4 AND status = 'running' AND lease_expires_at >= ?2".to_string();
         let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![
             Box::new(lease_expires_at),
             Box::new(now),
@@ -299,12 +298,23 @@ impl JobRepository {
             )));
         }
 
+        let now = Utc::now().to_rfc3339();
+
         if worker_id.is_some() || lease_token.is_some() {
             if current.status != JobState::Running {
                 return Err(JobError::StaleLease(format!(
                     "Cannot record checkpoint for job {}: current status is '{}', not 'running'",
                     job_id, current.status
                 )));
+            }
+
+            if let Some(expires_at) = &current.lease_expires_at {
+                if expires_at.as_str() < now.as_str() {
+                    return Err(JobError::StaleLease(format!(
+                        "Cannot record checkpoint for job {}: lease expired at {}",
+                        job_id, expires_at
+                    )));
+                }
             }
 
             if let Some(w) = worker_id {
@@ -327,7 +337,6 @@ impl JobRepository {
         }
 
         let id = uuid::Uuid::new_v4().to_string();
-        let now = Utc::now().to_rfc3339();
 
         conn.execute(
             "INSERT INTO job_checkpoints (id, job_id, stage, checkpoint_data, created_at)
@@ -367,12 +376,12 @@ impl JobRepository {
 
         let mut query = "UPDATE jobs SET status = 'completed', result = ?1, leased_by = NULL, lease_token = NULL, lease_expires_at = NULL, completed_at = ?2, updated_at = ?2 WHERE id = ?3 AND status NOT IN ('completed', 'failed', 'cancelled', 'dead_letter')".to_string();
         if worker_id.is_some() || lease_token.is_some() {
-            query.push_str(" AND status = 'running'");
+            query.push_str(" AND status = 'running' AND lease_expires_at >= ?2");
         }
 
         let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![
             Box::new(result_json),
-            Box::new(now),
+            Box::new(now.clone()),
             Box::new(job_id.to_string()),
         ];
 
@@ -404,6 +413,15 @@ impl JobRepository {
                 "Cannot complete job {}: already in terminal state '{}'",
                 job_id, current.status
             )));
+        }
+
+        if let Some(expires_at) = &current.lease_expires_at {
+            if expires_at.as_str() < now.as_str() {
+                return Err(JobError::StaleLease(format!(
+                    "Cannot complete job {}: lease expired at {}",
+                    job_id, expires_at
+                )));
+            }
         }
 
         Err(JobError::StaleLease(format!(
@@ -441,12 +459,23 @@ impl JobRepository {
             )));
         }
 
+        let now = Utc::now().to_rfc3339();
+
         if worker_id.is_some() || lease_token.is_some() {
             if current.status != JobState::Running {
                 return Err(JobError::StaleLease(format!(
                     "Cannot fail job {}: current status is '{}', not 'running'",
                     job_id, current.status
                 )));
+            }
+
+            if let Some(expires_at) = &current.lease_expires_at {
+                if expires_at.as_str() < now.as_str() {
+                    return Err(JobError::StaleLease(format!(
+                        "Cannot fail job {}: lease expired at {}",
+                        job_id, expires_at
+                    )));
+                }
             }
 
             if let Some(w) = worker_id {
@@ -468,7 +497,6 @@ impl JobRepository {
             }
         }
 
-        let now = Utc::now().to_rfc3339();
         if allow_retry && current.retry_count < current.max_retries {
             let next_count = current.retry_count + 1;
             let rows = conn.execute(

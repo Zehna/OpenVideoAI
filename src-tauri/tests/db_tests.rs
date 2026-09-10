@@ -296,3 +296,135 @@ fn test_migration_3_to_4_upgrade_regression() {
     )
     .expect("insert second null key job");
 }
+
+#[test]
+fn test_migration_4_reconciles_legacy_duplicate_idempotency_keys() {
+    let dir = tempdir().expect("failed to create tempdir");
+    let db_path = dir.path().join("pre_audit_duplicates.db");
+
+    // 1. Construct a pre-audit Migration-3 fixture containing duplicate non-null idempotency keys
+    {
+        let raw_conn = rusqlite::Connection::open(&db_path).expect("open raw db");
+        raw_conn
+            .execute_batch(
+                "CREATE TABLE _migrations (
+                    id INTEGER PRIMARY KEY,
+                    version INTEGER UNIQUE NOT NULL,
+                    name TEXT NOT NULL,
+                    applied_at TEXT NOT NULL
+                );
+                INSERT INTO _migrations (version, name, applied_at) VALUES (1, 'initial_app_metadata', datetime('now'));
+                INSERT INTO _migrations (version, name, applied_at) VALUES (2, 'project_and_artifact_core', datetime('now'));
+                INSERT INTO _migrations (version, name, applied_at) VALUES (3, 'durable_jobs_and_events', datetime('now'));
+
+                -- Migration 3 jobs table without unique constraint on idempotency_key to simulate legacy duplicate data
+                CREATE TABLE jobs (
+                    id TEXT PRIMARY KEY,
+                    job_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    idempotency_key TEXT,
+                    project_id TEXT,
+                    payload TEXT NOT NULL,
+                    result TEXT,
+                    error TEXT,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    max_retries INTEGER NOT NULL DEFAULT 3,
+                    leased_by TEXT,
+                    lease_expires_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT
+                );
+
+                CREATE INDEX idx_jobs_idempotency_key ON jobs(idempotency_key);
+
+                CREATE TABLE job_checkpoints (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                    stage TEXT NOT NULL,
+                    checkpoint_data TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE domain_events (
+                    id TEXT PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    project_id TEXT,
+                    job_id TEXT,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                -- Insert TWO jobs with the exact same non-null idempotency_key
+                INSERT INTO jobs (id, job_type, status, priority, idempotency_key, payload, created_at, updated_at)
+                VALUES ('job-dup-first', 'encode', 'completed', 10, 'shared-idemp-key', '{\"v\":1}', '2026-09-08T10:00:00Z', '2026-09-08T10:00:00Z');
+
+                INSERT INTO jobs (id, job_type, status, priority, idempotency_key, payload, created_at, updated_at)
+                VALUES ('job-dup-second', 'encode', 'completed', 10, 'shared-idemp-key', '{\"v\":2}', '2026-09-08T10:05:00Z', '2026-09-08T10:05:00Z');
+
+                -- Insert a third job with a unique idempotency key
+                INSERT INTO jobs (id, job_type, status, priority, idempotency_key, payload, created_at, updated_at)
+                VALUES ('job-unique', 'transcribe', 'queued', 5, 'unique-idemp-key', '{\"v\":3}', '2026-09-08T10:10:00Z', '2026-09-08T10:10:00Z');
+                ",
+            )
+            .expect("fixture legacy db with duplicates");
+    }
+
+    // 2. Run current migration engine (applying Migration 4)
+    let db_manager = DbManager::new(db_path).expect("init db manager");
+    db_manager
+        .run_migrations()
+        .expect("Migration 4 must succeed even with legacy duplicate idempotency keys");
+
+    let conn = db_manager.conn().expect("get conn");
+
+    // 3. Verify ALL 3 jobs are preserved (zero data loss)
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get(0))
+        .expect("count jobs");
+    assert_eq!(count, 3, "All 3 historical jobs must be preserved");
+
+    // 4. Verify the earliest job preserved the original idempotency key
+    let key_first: String = conn
+        .query_row(
+            "SELECT idempotency_key FROM jobs WHERE id = 'job-dup-first'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("get key first");
+    assert_eq!(key_first, "shared-idemp-key");
+
+    // 5. Verify the duplicate job's key was deterministically disambiguated
+    let key_second: String = conn
+        .query_row(
+            "SELECT idempotency_key FROM jobs WHERE id = 'job-dup-second'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("get key second");
+    assert_eq!(key_second, "shared-idemp-key#dup_job-dup-second");
+
+    // 6. Verify the unique job's key is unchanged
+    let key_unique: String = conn
+        .query_row(
+            "SELECT idempotency_key FROM jobs WHERE id = 'job-unique'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("get key unique");
+    assert_eq!(key_unique, "unique-idemp-key");
+
+    // 7. Verify the partial unique index exists and enforces uniqueness on new inserts
+    let dup_res = conn.execute(
+        "INSERT INTO jobs (id, job_type, status, priority, idempotency_key, payload, created_at, updated_at)
+         VALUES ('job-new-conflict', 'encode', 'queued', 0, 'shared-idemp-key', '{}', datetime('now'), datetime('now'));",
+        [],
+    );
+    assert!(
+        dup_res.is_err(),
+        "New insert with existing non-null idempotency_key must fail"
+    );
+}

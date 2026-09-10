@@ -125,6 +125,21 @@ pub static MIGRATIONS: &[Migration] = &[
         sql: "
             ALTER TABLE jobs ADD COLUMN payload_version INTEGER NOT NULL DEFAULT 1;
             ALTER TABLE jobs ADD COLUMN lease_token TEXT;
+
+            -- Deterministic reconciliation for legacy duplicate idempotency keys:
+            -- The earliest job (MIN rowid) retains the original idempotency_key.
+            -- Subsequent duplicate rows are disambiguated as '<key>#dup_<id>',
+            -- preserving 100% of historical job rows with zero data loss.
+            UPDATE jobs 
+            SET idempotency_key = idempotency_key || '#dup_' || id 
+            WHERE rowid NOT IN (
+                SELECT MIN(rowid) 
+                FROM jobs 
+                WHERE idempotency_key IS NOT NULL 
+                GROUP BY idempotency_key
+            )
+            AND idempotency_key IS NOT NULL;
+
             DROP INDEX IF EXISTS idx_jobs_idempotency_key;
             CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency_key ON jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
         ",
