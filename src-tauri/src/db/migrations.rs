@@ -79,13 +79,11 @@ pub static MIGRATIONS: &[Migration] = &[
                 idempotency_key TEXT UNIQUE,
                 project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
                 payload TEXT NOT NULL,
-                payload_version INTEGER NOT NULL DEFAULT 1,
                 result TEXT,
                 error TEXT,
                 retry_count INTEGER NOT NULL DEFAULT 0,
                 max_retries INTEGER NOT NULL DEFAULT 3,
                 leased_by TEXT,
-                lease_token TEXT,
                 lease_expires_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -95,7 +93,7 @@ pub static MIGRATIONS: &[Migration] = &[
 
             CREATE INDEX IF NOT EXISTS idx_jobs_status_priority ON jobs(status, priority DESC, created_at ASC);
             CREATE INDEX IF NOT EXISTS idx_jobs_project_id ON jobs(project_id);
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency_key ON jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_jobs_idempotency_key ON jobs(idempotency_key);
 
             CREATE TABLE IF NOT EXISTS job_checkpoints (
                 id TEXT PRIMARY KEY,
@@ -119,6 +117,16 @@ pub static MIGRATIONS: &[Migration] = &[
 
             CREATE INDEX IF NOT EXISTS idx_domain_events_type_created ON domain_events(event_type, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_domain_events_job_id ON domain_events(job_id);
+        ",
+    },
+    Migration {
+        version: 4,
+        name: "jobs_durability_and_concurrency_audit",
+        sql: "
+            ALTER TABLE jobs ADD COLUMN payload_version INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE jobs ADD COLUMN lease_token TEXT;
+            DROP INDEX IF EXISTS idx_jobs_idempotency_key;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency_key ON jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
         ",
     },
 ];

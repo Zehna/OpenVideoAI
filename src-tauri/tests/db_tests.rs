@@ -68,7 +68,7 @@ fn test_migration_3_schema_and_foreign_keys() {
 
     assert_eq!(
         db_manager.get_migration_count().expect("migration count"),
-        3
+        4
     );
 
     let conn = db_manager.conn().expect("conn failed");
@@ -117,4 +117,182 @@ fn test_migration_3_schema_and_foreign_keys() {
         [],
     )
     .expect("insert domain event failed");
+}
+
+#[test]
+fn test_migration_3_to_4_upgrade_regression() {
+    let dir = tempdir().expect("failed to create tempdir");
+    let db_path = dir.path().join("pre_audit_legacy.db");
+
+    // 1. Manually fixture a pre-audit database applied up to migration 3
+    {
+        let raw_conn = rusqlite::Connection::open(&db_path).expect("open raw db");
+        raw_conn
+            .execute_batch(
+                "CREATE TABLE _migrations (
+                    id INTEGER PRIMARY KEY,
+                    version INTEGER UNIQUE NOT NULL,
+                    name TEXT NOT NULL,
+                    applied_at TEXT NOT NULL
+                );
+                INSERT INTO _migrations (version, name, applied_at) VALUES (1, 'initial_app_metadata', datetime('now'));
+                INSERT INTO _migrations (version, name, applied_at) VALUES (2, 'project_and_artifact_core', datetime('now'));
+                INSERT INTO _migrations (version, name, applied_at) VALUES (3, 'durable_jobs_and_events', datetime('now'));
+
+                -- Pre-audit migration 3 jobs table (NO payload_version, NO lease_token)
+                CREATE TABLE jobs (
+                    id TEXT PRIMARY KEY,
+                    job_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    idempotency_key TEXT UNIQUE,
+                    project_id TEXT,
+                    payload TEXT NOT NULL,
+                    result TEXT,
+                    error TEXT,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    max_retries INTEGER NOT NULL DEFAULT 3,
+                    leased_by TEXT,
+                    lease_expires_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT
+                );
+
+                CREATE INDEX idx_jobs_status_priority ON jobs(status, priority DESC, created_at ASC);
+                CREATE INDEX idx_jobs_project_id ON jobs(project_id);
+                CREATE INDEX idx_jobs_idempotency_key ON jobs(idempotency_key);
+
+                CREATE TABLE job_checkpoints (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                    stage TEXT NOT NULL,
+                    checkpoint_data TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE domain_events (
+                    id TEXT PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    project_id TEXT,
+                    job_id TEXT,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                -- 2. Insert existing row into legacy jobs table to verify data preservation
+                INSERT INTO jobs (id, job_type, status, priority, idempotency_key, payload, created_at, updated_at)
+                VALUES ('job-legacy-1', 'transcode', 'queued', 10, 'legacy-key-999', '{\"source\":\"old.mp4\"}', '2026-09-09T10:00:00Z', '2026-09-09T10:00:00Z');
+                ",
+            )
+            .expect("fixture pre-audit db");
+    }
+
+    // 3. Run current migration engine on the pre-audit database
+    let db_manager = DbManager::new(db_path).expect("init db manager");
+    db_manager
+        .run_migrations()
+        .expect("upgrade migrations to 4 must succeed");
+
+    assert_eq!(
+        db_manager.get_migration_count().expect("migration count"),
+        4,
+        "Expected all 4 migrations applied after upgrade"
+    );
+
+    let conn = db_manager.conn().expect("get conn");
+
+    // 4. Verify existing legacy row was preserved and received default payload_version = 1
+    let mut stmt = conn
+        .prepare("SELECT id, job_type, payload, payload_version, lease_token, idempotency_key FROM jobs WHERE id = 'job-legacy-1'")
+        .expect("prepare select");
+    let (id, job_type, payload, payload_version, lease_token, idempotency_key): (
+        String,
+        String,
+        String,
+        i32,
+        Option<String>,
+        Option<String>,
+    ) = stmt
+        .query_row([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })
+        .expect("query existing row");
+
+    assert_eq!(id, "job-legacy-1");
+    assert_eq!(job_type, "transcode");
+    assert_eq!(payload, "{\"source\":\"old.mp4\"}");
+    assert_eq!(
+        payload_version, 1,
+        "Existing row must receive default payload_version = 1"
+    );
+    assert!(
+        lease_token.is_none(),
+        "lease_token should default to NULL on existing row"
+    );
+    assert_eq!(idempotency_key.as_deref(), Some("legacy-key-999"));
+
+    // 5. Verify lease_token column support exists and can be updated
+    conn.execute(
+        "UPDATE jobs SET lease_token = 'token-uuid-456' WHERE id = 'job-legacy-1'",
+        [],
+    )
+    .expect("update lease_token");
+    let updated_token: String = conn
+        .query_row(
+            "SELECT lease_token FROM jobs WHERE id = 'job-legacy-1'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("select updated token");
+    assert_eq!(updated_token, "token-uuid-456");
+
+    // 6. Verify the partial unique idempotency index exists and enforces uniqueness
+    let index_sql: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_jobs_idempotency_key'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("select index sql");
+    assert!(
+        index_sql.contains("WHERE idempotency_key IS NOT NULL"),
+        "Index must be a partial unique index on non-null idempotency_key: {}",
+        index_sql
+    );
+
+    // Duplicate non-null key must fail
+    let dup_res = conn.execute(
+        "INSERT INTO jobs (id, job_type, status, priority, idempotency_key, payload, created_at, updated_at)
+         VALUES ('job-new-dup', 'transcode', 'queued', 5, 'legacy-key-999', '{}', datetime('now'), datetime('now'));",
+        [],
+    );
+    assert!(
+        dup_res.is_err(),
+        "Duplicate non-null idempotency key must fail unique index"
+    );
+
+    // Multiple NULL idempotency keys must succeed
+    conn.execute(
+        "INSERT INTO jobs (id, job_type, status, priority, idempotency_key, payload, created_at, updated_at)
+         VALUES ('job-null-1', 'transcode', 'queued', 0, NULL, '{}', datetime('now'), datetime('now'));",
+        [],
+    )
+    .expect("insert first null key job");
+
+    conn.execute(
+        "INSERT INTO jobs (id, job_type, status, priority, idempotency_key, payload, created_at, updated_at)
+         VALUES ('job-null-2', 'transcode', 'queued', 0, NULL, '{}', datetime('now'), datetime('now'));",
+        [],
+    )
+    .expect("insert second null key job");
 }
