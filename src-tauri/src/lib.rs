@@ -63,9 +63,12 @@ pub fn run() {
                 db_manager.clone(),
                 local_store,
             ));
-            let job_manager = Arc::new(jobs::manager::JobManager::new(db_manager.clone()));
+            let event_bus = Arc::new(events::bus::EventBus::new(db_manager.clone()));
+            let job_manager = Arc::new(jobs::manager::JobManager::with_event_bus(
+                db_manager.clone(),
+                event_bus.clone(),
+            ));
             let _ = job_manager.reap_expired_leases();
-            let event_bus = Arc::new(events::bus::EventBus::new(db_manager));
 
             // Bridge domain events to frontend webview
             let app_handle = app.handle().clone();

@@ -21,6 +21,7 @@ fn test_reap_expired_leases_recovers_crashed_worker_job() {
         .submit_job(JobSubmission {
             job_type: "heavy_processing".to_string(),
             payload: "{}".to_string(),
+            payload_version: None,
             priority: Some(10),
             idempotency_key: None,
             project_id: None,
@@ -59,6 +60,7 @@ fn test_reap_expired_leases_exhausts_to_dead_letter() {
         .submit_job(JobSubmission {
             job_type: "fatal_crash_task".to_string(),
             payload: "{}".to_string(),
+            payload_version: None,
             priority: Some(0),
             idempotency_key: None,
             project_id: None,
@@ -92,6 +94,7 @@ fn test_active_lease_is_not_reaped() {
         .submit_job(JobSubmission {
             job_type: "healthy_task".to_string(),
             payload: "{}".to_string(),
+            payload_version: None,
             priority: Some(0),
             idempotency_key: None,
             project_id: None,

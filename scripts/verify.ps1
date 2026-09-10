@@ -18,6 +18,9 @@ function Check-Result {
 
 $startTime = Get-Date
 
+# Constrain concurrent build jobs to prevent Windows paging file exhaustion (os error 1455)
+$env:CARGO_BUILD_JOBS = "2"
+
 Write-Host "Starting OpenVideoAI Phase 2 Quality Gates..." -ForegroundColor Magenta
 
 # 1. Frontend Typecheck

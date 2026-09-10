@@ -16,11 +16,13 @@ export interface Job {
   idempotencyKey: string | null;
   projectId: string | null;
   payload: string;
+  payloadVersion: number;
   result: string | null;
   error: string | null;
   retryCount: number;
   maxRetries: number;
   leasedBy: string | null;
+  leaseToken: string | null;
   leaseExpiresAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -49,6 +51,7 @@ export interface DomainEvent<T = unknown> {
 export interface JobSubmission {
   jobType: string;
   payload: string;
+  payloadVersion?: number;
   priority?: number;
   idempotencyKey?: string | null;
   projectId?: string | null;

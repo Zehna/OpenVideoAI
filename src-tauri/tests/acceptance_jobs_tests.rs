@@ -1,7 +1,6 @@
 use chrono::{Duration, Utc};
 use openvideoai_lib::db::DbManager;
 use openvideoai_lib::events::bus::EventBus;
-use openvideoai_lib::events::model::DomainEvent;
 use openvideoai_lib::jobs::manager::JobManager;
 use openvideoai_lib::jobs::model::{JobState, JobSubmission};
 use serde_json::json;
@@ -27,9 +26,10 @@ fn test_phase2_durable_jobs_events_and_crash_recovery_acceptance() {
         counter_clone.fetch_add(1, Ordering::SeqCst);
     }));
 
-    // 3. Initialize JobManager with specific worker identity
-    let job_manager = Arc::new(JobManager::with_worker_id(
+    // 3. Initialize JobManager with specific worker identity and shared event bus
+    let job_manager = Arc::new(JobManager::with_worker_and_event_bus(
         db_manager.clone(),
+        event_bus.clone(),
         "worker-alpha".to_string(),
     ));
 
@@ -37,6 +37,7 @@ fn test_phase2_durable_jobs_events_and_crash_recovery_acceptance() {
     let sub1 = JobSubmission {
         job_type: "video_probe".to_string(),
         payload: json!({ "file": "clip_4k.mp4" }).to_string(),
+        payload_version: Some(1),
         priority: Some(50),
         idempotency_key: Some("idemp-unique-key-101".to_string()),
         project_id: None,
@@ -50,21 +51,11 @@ fn test_phase2_durable_jobs_events_and_crash_recovery_acceptance() {
     assert_eq!(job1.status, JobState::Queued);
     assert_eq!(job1.priority, 50);
 
-    // Emit JobQueued domain event
-    let event_queued = DomainEvent::new(
-        "JobQueued".to_string(),
-        None,
-        Some(job1.id.clone()),
-        json!({ "jobType": job1.job_type, "priority": job1.priority }),
-    );
-    event_bus
-        .publish(event_queued)
-        .expect("publish job queued event");
-
     // Re-submit identical idempotency key
     let sub1_dup = JobSubmission {
         job_type: "video_probe".to_string(),
         payload: json!({ "file": "different_payload_ignored.mp4" }).to_string(),
+        payload_version: None,
         priority: Some(99),
         idempotency_key: Some("idemp-unique-key-101".to_string()),
         project_id: None,
@@ -88,6 +79,7 @@ fn test_phase2_durable_jobs_events_and_crash_recovery_acceptance() {
     let sub_high = JobSubmission {
         job_type: "audio_transcribe".to_string(),
         payload: json!({ "audio": "interview.wav" }).to_string(),
+        payload_version: None,
         priority: Some(100),
         idempotency_key: Some("idemp-high-100".to_string()),
         project_id: None,
@@ -100,6 +92,7 @@ fn test_phase2_durable_jobs_events_and_crash_recovery_acceptance() {
     let sub_low = JobSubmission {
         job_type: "export_summary".to_string(),
         payload: json!({ "summary": true }).to_string(),
+        payload_version: None,
         priority: Some(10),
         idempotency_key: Some("idemp-low-10".to_string()),
         project_id: None,
@@ -176,16 +169,6 @@ fn test_phase2_durable_jobs_events_and_crash_recovery_acceptance() {
     assert_eq!(completed.status, JobState::Completed);
     assert!(completed.result.is_some());
     assert!(completed.completed_at.is_some());
-
-    let event_completed = DomainEvent::new(
-        "JobCompleted".to_string(),
-        None,
-        Some(completed.id.clone()),
-        json!({ "durationMs": 500 }),
-    );
-    event_bus
-        .publish(event_completed)
-        .expect("publish job completed");
 
     // 10. Worker Beta acquires next highest priority (Job 1, Priority 50)
     let worker_beta_manager =

@@ -1,14 +1,14 @@
 use super::model::{Job, JobCheckpoint, JobSubmission};
-use crate::events::model::DomainEvent;
 use crate::AppState;
-use serde_json::json;
 use tauri::State;
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn submit_job(
     state: State<'_, AppState>,
     job_type: String,
     payload: String,
+    payload_version: Option<i32>,
     priority: Option<i32>,
     idempotency_key: Option<String>,
     project_id: Option<String>,
@@ -17,30 +17,17 @@ pub fn submit_job(
     let submission = JobSubmission {
         job_type,
         payload,
+        payload_version,
         priority,
         idempotency_key,
         project_id,
         max_retries,
     };
 
-    let job = state
+    state
         .job_manager
         .submit_job(submission)
-        .map_err(|e| e.to_string())?;
-
-    let event = DomainEvent::new(
-        "JobQueued".to_string(),
-        job.project_id.clone(),
-        Some(job.id.clone()),
-        json!({
-            "jobType": job.job_type,
-            "priority": job.priority,
-            "status": job.status.as_str(),
-        }),
-    );
-    let _ = state.event_bus.publish(event);
-
-    Ok(job)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -53,22 +40,10 @@ pub fn get_job(state: State<'_, AppState>, job_id: String) -> Result<Option<Job>
 
 #[tauri::command]
 pub fn cancel_job(state: State<'_, AppState>, job_id: String) -> Result<Job, String> {
-    let job = state
+    state
         .job_manager
         .cancel_job(&job_id)
-        .map_err(|e| e.to_string())?;
-
-    let event = DomainEvent::new(
-        "JobCancelled".to_string(),
-        job.project_id.clone(),
-        Some(job.id.clone()),
-        json!({
-            "status": job.status.as_str(),
-        }),
-    );
-    let _ = state.event_bus.publish(event);
-
-    Ok(job)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

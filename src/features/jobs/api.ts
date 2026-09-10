@@ -5,6 +5,7 @@ export async function submitJob(submission: JobSubmission): Promise<Job> {
   return await invoke<Job>("submit_job", {
     jobType: submission.jobType,
     payload: submission.payload,
+    payloadVersion: submission.payloadVersion ?? 1,
     priority: submission.priority ?? null,
     idempotencyKey: submission.idempotencyKey ?? null,
     projectId: submission.projectId ?? null,

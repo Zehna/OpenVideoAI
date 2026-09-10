@@ -1,6 +1,6 @@
 use super::model::DomainEvent;
 use crate::db::{DbError, DbManager};
-use rusqlite::{params, Row};
+use rusqlite::{params, Connection, Row};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
@@ -18,6 +18,16 @@ pub enum EventError {
 
 pub type EventHandler = Arc<dyn Fn(&DomainEvent<serde_json::Value>) + Send + Sync>;
 
+/// Domain Event Bus supporting transactional SQLite audit persistence and process-local broadcast.
+///
+/// ## Delivery & Durability Semantics:
+/// 1. **Durable Persistence:** Domain events semantically tied to job state transitions MUST be persisted
+///    in the same SQLite transaction as the state mutation (`EventBus::record_event_tx`). If the transaction
+///    aborts or crashes, the event is rolled back. Once committed to `domain_events`, the audit log is durable.
+/// 2. **Best-Effort Broadcast:** Process-local in-memory subscribers (such as the Tauri webview event bridge)
+///    are invoked via `EventBus::broadcast` ONLY AFTER the enclosing SQLite transaction has committed.
+/// 3. **External Delivery:** Reliable outbox polling / external webhooks / remote workers are explicitly out
+///    of scope for Phase 2 and deferred to future network integrations.
 pub struct EventBus {
     db: Arc<DbManager>,
     subscribers: Mutex<Vec<EventHandler>>,
@@ -53,39 +63,54 @@ impl EventBus {
         }
     }
 
-    /// Publish a domain event: persists to SQLite domain_events and notifies in-memory subscribers.
-    pub fn publish(&self, event: DomainEvent<serde_json::Value>) -> Result<(), EventError> {
+    /// Persist a domain event inside an existing SQLite transaction/connection.
+    /// Guarantees that state mutations and event logging are atomic.
+    pub fn record_event_tx(
+        conn: &Connection,
+        event: &DomainEvent<serde_json::Value>,
+    ) -> Result<(), EventError> {
         let payload_str = serde_json::to_string(&event.payload)?;
 
-        {
-            let conn = self.db.conn()?;
-            conn.execute(
-                "INSERT INTO domain_events (id, event_type, version, project_id, job_id, payload, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![
-                    event.event_id,
-                    event.event_type,
-                    event.version,
-                    event.project_id,
-                    event.job_id,
-                    payload_str,
-                    event.timestamp,
-                ],
-            )?;
-        }
+        conn.execute(
+            "INSERT INTO domain_events (id, event_type, version, project_id, job_id, payload, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                event.event_id,
+                event.event_type,
+                event.version,
+                event.project_id,
+                event.job_id,
+                payload_str,
+                event.timestamp,
+            ],
+        )?;
 
         tracing::info!(
             event_id = %event.event_id,
             event_type = %event.event_type,
-            "Published domain event"
+            "Persisted domain event to SQLite"
         );
 
+        Ok(())
+    }
+
+    /// Broadcast a domain event to all registered in-memory subscribers.
+    /// MUST be called AFTER the transaction persisting the event has committed.
+    pub fn broadcast(&self, event: &DomainEvent<serde_json::Value>) {
         if let Ok(subs) = self.subscribers.lock() {
             for sub in subs.iter() {
-                sub(&event);
+                sub(event);
             }
         }
+    }
 
+    /// Convenience standalone publish: persists to SQLite in its own connection, then broadcasts.
+    pub fn publish(&self, event: DomainEvent<serde_json::Value>) -> Result<(), EventError> {
+        {
+            let conn = self.db.conn()?;
+            Self::record_event_tx(&conn, &event)?;
+        }
+        self.broadcast(&event);
         Ok(())
     }
 

@@ -162,9 +162,19 @@ export const JobDetailModal: React.FC<JobDetailModalProps> = ({
             </span>
           </div>
           <div>
+            <span className="text-gray-500 block uppercase text-[10px] font-semibold">Payload Ver</span>
+            <span className="text-gray-200 font-mono font-medium">v{job.payloadVersion}</span>
+          </div>
+          <div>
             <span className="text-gray-500 block uppercase text-[10px] font-semibold">Worker Lease</span>
             <span className="text-gray-200 font-mono truncate block" title={job.leasedBy ?? 'None'}>
               {job.leasedBy ?? 'Unassigned'}
+            </span>
+          </div>
+          <div>
+            <span className="text-gray-500 block uppercase text-[10px] font-semibold">Lease Token</span>
+            <span className="text-gray-200 font-mono truncate block" title={job.leaseToken ?? 'None'}>
+              {job.leaseToken ? `${job.leaseToken.slice(0, 8)}...` : 'None'}
             </span>
           </div>
           <div>

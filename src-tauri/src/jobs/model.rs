@@ -28,6 +28,13 @@ impl JobState {
             Self::DeadLetter => "dead_letter",
         }
     }
+
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::Cancelled | Self::DeadLetter
+        )
+    }
 }
 
 impl fmt::Display for JobState {
@@ -64,16 +71,23 @@ pub struct Job {
     pub idempotency_key: Option<String>,
     pub project_id: Option<String>,
     pub payload: String,
+    #[serde(default = "default_payload_version")]
+    pub payload_version: i32,
     pub result: Option<String>,
     pub error: Option<String>,
     pub retry_count: i32,
     pub max_retries: i32,
     pub leased_by: Option<String>,
+    pub lease_token: Option<String>,
     pub lease_expires_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
+}
+
+fn default_payload_version() -> i32 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -86,11 +100,12 @@ pub struct JobCheckpoint {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct JobSubmission {
     pub job_type: String,
     pub payload: String,
+    pub payload_version: Option<i32>,
     pub priority: Option<i32>,
     pub idempotency_key: Option<String>,
     pub project_id: Option<String>,

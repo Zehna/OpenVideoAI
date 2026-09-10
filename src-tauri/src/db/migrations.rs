@@ -79,11 +79,13 @@ pub static MIGRATIONS: &[Migration] = &[
                 idempotency_key TEXT UNIQUE,
                 project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
                 payload TEXT NOT NULL,
+                payload_version INTEGER NOT NULL DEFAULT 1,
                 result TEXT,
                 error TEXT,
                 retry_count INTEGER NOT NULL DEFAULT 0,
                 max_retries INTEGER NOT NULL DEFAULT 3,
                 leased_by TEXT,
+                lease_token TEXT,
                 lease_expires_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -93,7 +95,7 @@ pub static MIGRATIONS: &[Migration] = &[
 
             CREATE INDEX IF NOT EXISTS idx_jobs_status_priority ON jobs(status, priority DESC, created_at ASC);
             CREATE INDEX IF NOT EXISTS idx_jobs_project_id ON jobs(project_id);
-            CREATE INDEX IF NOT EXISTS idx_jobs_idempotency_key ON jobs(idempotency_key);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency_key ON jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
             CREATE TABLE IF NOT EXISTS job_checkpoints (
                 id TEXT PRIMARY KEY,

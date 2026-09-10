@@ -20,6 +20,7 @@ fn test_enqueue_and_get_job() {
     let submission = JobSubmission {
         job_type: "proxy_generation".to_string(),
         payload: r#"{"source":"video.mp4"}"#.to_string(),
+        payload_version: None,
         priority: Some(5),
         idempotency_key: None,
         project_id: None,
@@ -47,6 +48,7 @@ fn test_idempotent_enqueue_returns_existing() {
     let sub1 = JobSubmission {
         job_type: "transcribe".to_string(),
         payload: r#"{"file":"audio.mp3"}"#.to_string(),
+        payload_version: None,
         priority: Some(0),
         idempotency_key: Some("unique-key-abc".to_string()),
         project_id: None,
@@ -56,6 +58,7 @@ fn test_idempotent_enqueue_returns_existing() {
     let sub2 = JobSubmission {
         job_type: "transcribe".to_string(),
         payload: r#"{"file":"different.mp3"}"#.to_string(),
+        payload_version: None,
         priority: Some(10),
         idempotency_key: Some("unique-key-abc".to_string()),
         project_id: None,
@@ -81,6 +84,7 @@ fn test_priority_ordering_on_acquire_lease() {
         JobSubmission {
             job_type: "task_low".to_string(),
             payload: "{}".to_string(),
+            payload_version: None,
             priority: Some(0),
             idempotency_key: None,
             project_id: None,
@@ -94,6 +98,7 @@ fn test_priority_ordering_on_acquire_lease() {
         JobSubmission {
             job_type: "task_high".to_string(),
             payload: "{}".to_string(),
+            payload_version: None,
             priority: Some(100),
             idempotency_key: None,
             project_id: None,
@@ -107,6 +112,7 @@ fn test_priority_ordering_on_acquire_lease() {
         JobSubmission {
             job_type: "task_medium".to_string(),
             payload: "{}".to_string(),
+            payload_version: None,
             priority: Some(50),
             idempotency_key: None,
             project_id: None,
@@ -150,6 +156,7 @@ fn test_heartbeat_extends_lease() {
         JobSubmission {
             job_type: "render".to_string(),
             payload: "{}".to_string(),
+            payload_version: None,
             priority: Some(0),
             idempotency_key: None,
             project_id: None,
@@ -185,6 +192,7 @@ fn test_checkpoint_persistence_and_retrieval() {
         JobSubmission {
             job_type: "multi_stage".to_string(),
             payload: "{}".to_string(),
+            payload_version: None,
             priority: Some(0),
             idempotency_key: None,
             project_id: None,
@@ -214,6 +222,7 @@ fn test_job_retry_transition_to_dead_letter() {
         JobSubmission {
             job_type: "failing_task".to_string(),
             payload: "{}".to_string(),
+            payload_version: None,
             priority: Some(0),
             idempotency_key: None,
             project_id: None,
@@ -252,6 +261,7 @@ fn test_job_cancellation() {
         JobSubmission {
             job_type: "cancel_me".to_string(),
             payload: "{}".to_string(),
+            payload_version: None,
             priority: Some(0),
             idempotency_key: None,
             project_id: None,
