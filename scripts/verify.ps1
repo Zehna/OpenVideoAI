@@ -18,8 +18,9 @@ function Check-Result {
 
 $startTime = Get-Date
 
-# Constrain concurrent build jobs to prevent Windows paging file exhaustion (os error 1455)
-$env:CARGO_BUILD_JOBS = "2"
+# Constrain concurrent build jobs and debuginfo level to prevent Windows paging file exhaustion (os error 1455)
+$env:CARGO_BUILD_JOBS = "1"
+$env:RUSTFLAGS = "-C debuginfo=0"
 
 Write-Host "Starting OpenVideoAI Phase 2 Quality Gates..." -ForegroundColor Magenta
 
