@@ -6,6 +6,7 @@ pub mod preview;
 pub mod renderspec;
 pub mod repository;
 pub mod service;
+pub mod worker;
 
 pub use compiler::{FfmpegCompiler, FfmpegExecutionPlan, ResolvedInput};
 pub use error::TimelineError;
@@ -19,3 +20,4 @@ pub use renderspec::{
 };
 pub use repository::TimelineRepository;
 pub use service::TimelineService;
+pub use worker::{start_local_render_worker, LocalRenderWorker, LocalRenderWorkerHandle};
