@@ -1,3 +1,4 @@
+pub mod compiler;
 pub mod error;
 pub mod model;
 pub mod mutation;
@@ -6,6 +7,7 @@ pub mod renderspec;
 pub mod repository;
 pub mod service;
 
+pub use compiler::{FfmpegCompiler, FfmpegExecutionPlan, ResolvedInput};
 pub use error::TimelineError;
 pub use model::{
     CanvasConfig, ClipTransform, TimelineClip, TimelineDocument, TimelineTrack, TrackKind,
