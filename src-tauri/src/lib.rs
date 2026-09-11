@@ -6,6 +6,7 @@ pub mod jobs;
 pub mod logging;
 pub mod projects;
 pub mod storage;
+pub mod timeline;
 pub mod tools;
 
 use std::sync::Arc;
