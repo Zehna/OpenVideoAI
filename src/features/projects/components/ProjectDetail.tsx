@@ -12,12 +12,14 @@ interface ProjectDetailProps {
   project: Project;
   onBack: () => void;
   onProjectUpdated: (updated: Project) => void;
+  onOpenEditor?: () => void;
 }
 
 export const ProjectDetail: React.FC<ProjectDetailProps> = ({
   project,
   onBack,
   onProjectUpdated,
+  onOpenEditor,
 }) => {
   const [name, setName] = useState(project.name);
   const [description, setDescription] = useState(project.description || '');
@@ -105,6 +107,11 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
               </span>
             )}
           </div>
+          {onOpenEditor && (
+            <Button onClick={onOpenEditor} variant="secondary">
+              Open Timeline Editor
+            </Button>
+          )}
           <Button onClick={() => setIsImportModalOpen(true)}>
             + Import Media
           </Button>

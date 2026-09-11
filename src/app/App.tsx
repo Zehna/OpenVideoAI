@@ -4,6 +4,7 @@ import { HealthDashboard } from "../features/health/HealthDashboard";
 import { ProjectList } from "../features/projects/components/ProjectList";
 import { ProjectDetail } from "../features/projects/components/ProjectDetail";
 import { JobList } from "../features/jobs/components/JobList";
+import { EditorView } from "../components/editor/EditorView";
 import { listProjects, createProject } from "../features/projects/api";
 import type { Project } from "../features/projects/types";
 
@@ -11,6 +12,7 @@ export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<"projects" | "jobs" | "health">("projects");
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   const loadProjects = useCallback(async () => {
@@ -100,6 +102,11 @@ export const App: React.FC = () => {
           <HealthDashboard />
         ) : activeTab === "jobs" ? (
           <JobList />
+        ) : editingProjectId ? (
+          <EditorView
+            projectId={editingProjectId}
+            onBack={() => setEditingProjectId(null)}
+          />
         ) : selectedProject ? (
           <ProjectDetail
             project={selectedProject}
@@ -108,6 +115,7 @@ export const App: React.FC = () => {
               void loadProjects();
             }}
             onProjectUpdated={handleProjectUpdated}
+            onOpenEditor={() => setEditingProjectId(selectedProject.id)}
           />
         ) : (
           <ProjectList
