@@ -39,3 +39,9 @@ impl From<rusqlite::Error> for TimelineError {
         TimelineError::Database(err.to_string())
     }
 }
+
+impl From<crate::db::DbError> for TimelineError {
+    fn from(err: crate::db::DbError) -> Self {
+        TimelineError::Database(err.to_string())
+    }
+}
