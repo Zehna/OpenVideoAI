@@ -178,15 +178,56 @@ fn test_d_audio_only_track() {
 #[test]
 fn test_e_muted_clip() {
     let (mut spec, map, out) = create_base_spec();
-    spec.tracks[0].clips[0].muted = true; // Clip 1 muted
+    // Clip 0 has has_video: true, has_audio: true
+    // Enable audio on Clip 1 as well to explicitly verify partial audio exclusion
+    spec.tracks[0].clips[1].has_audio = true;
+    spec.tracks[0].clips[0].muted = true; // Clip 0 muted
+    spec.tracks[0].clips[1].muted = false; // Clip 1 unmuted
 
     let plan = FfmpegCompiler::compile(&spec, &map, out).unwrap();
-    // Clip 1 audio excluded, silence generator inserted
-    assert!(!plan.filter_complex.contains("art-video-1"));
-    assert!(!plan.filter_complex.contains("[0:a]"));
-    // Critical Invariant: clip.muted suppresses AUDIO only; video remains visible!
-    assert!(plan.filter_complex.contains("[0:v]"));
-    assert!(plan.filter_complex.contains("anullsrc="));
+
+    // 1. Explicit proof: clip 0's video stream remains in the video composition
+    assert!(
+        plan.filter_complex.contains("[0:v]trim="),
+        "Muted video clip must have its video stream trimmed"
+    );
+    assert!(
+        plan.filter_complex.contains("setpts=PTS-STARTPTS+0.000/TB"),
+        "Muted video clip must have its video PTS mapped"
+    );
+    assert!(
+        plan.filter_complex.contains("[v_clip_0_scaled]"),
+        "Muted video clip must be scaled and padded"
+    );
+    assert!(
+        plan.filter_complex
+            .contains("overlay=x=0:y=0:enable='between(t,0.000,2.000)'"),
+        "Muted video clip must be overlaid onto the canvas"
+    );
+    // Clip 1's video also remains in the composition
+    assert!(plan.filter_complex.contains("[1:v]trim="));
+
+    // 2. Explicit proof: ONLY the muted clip's audio contribution is excluded
+    assert!(
+        !plan.filter_complex.contains("[0:a]"),
+        "Muted clip audio stream [0:a] must be completely excluded"
+    );
+    assert!(
+        plan.filter_complex.contains("[1:a]atrim="),
+        "Unmuted clip audio stream [1:a] must remain included"
+    );
+    assert!(
+        plan.filter_complex.contains("adelay=3500|3500:all=1"),
+        "Unmuted clip audio must be delayed to its timeline position"
+    );
+
+    // 3. Verify case where ALL clips are muted -> silence generator inserted
+    let (mut spec_all_muted, map_all, out_all) = create_base_spec();
+    spec_all_muted.tracks[0].clips[0].muted = true;
+    let plan_all = FfmpegCompiler::compile(&spec_all_muted, &map_all, out_all).unwrap();
+    assert!(plan_all.filter_complex.contains("[0:v]"));
+    assert!(!plan_all.filter_complex.contains("[0:a]"));
+    assert!(plan_all.filter_complex.contains("anullsrc="));
 }
 
 #[test]

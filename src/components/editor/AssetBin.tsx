@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { listProjectArtifacts } from '../../features/artifacts/api';
+import { listProjectArtifacts, importArtifact } from '../../features/artifacts/api';
+import { ImportModal } from '../../features/artifacts/components/ImportModal';
 import type { ImportedArtifact } from '../../features/artifacts/types';
 
 interface AssetBinProps {
@@ -15,6 +16,7 @@ export const AssetBin: React.FC<AssetBinProps> = ({
 }) => {
   const [artifacts, setArtifacts] = useState<ImportedArtifact[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadAssets = useCallback(async () => {
@@ -34,20 +36,40 @@ export const AssetBin: React.FC<AssetBinProps> = ({
     void loadAssets();
   }, [loadAssets]);
 
+  const handleImport = async (sourcePath: string) => {
+    await importArtifact(projectId, sourcePath);
+    await loadAssets();
+  };
+
   return (
     <div className="flex flex-col h-full bg-gray-900/50 border-r border-gray-800 w-72 shrink-0">
       <div className="p-3 border-b border-gray-800 flex items-center justify-between">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">
           Media Assets
         </h2>
-        <button
-          onClick={() => void loadAssets()}
-          className="text-xs text-gray-500 hover:text-gray-300"
-          title="Refresh Assets"
-        >
-          ↻
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setIsImportModalOpen(true)}
+            className="text-[11px] px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-indigo-300 transition-colors"
+            title="Import Media"
+          >
+            + Import
+          </button>
+          <button
+            onClick={() => void loadAssets()}
+            className="text-xs text-gray-500 hover:text-gray-300 p-0.5"
+            title="Refresh Assets"
+          >
+            ↻
+          </button>
+        </div>
       </div>
+
+      <ImportModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        onImport={handleImport}
+      />
 
       <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
         {isLoading ? (

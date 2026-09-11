@@ -220,6 +220,56 @@ export const EditorView: React.FC<EditorViewProps> = ({
     }
   };
 
+  const handleMoveClip = async (clip: TimelineClip, deltaMs: number) => {
+    if (!timeline) return;
+    const newStart = Math.max(0, clip.timelineStartMs + deltaMs);
+    try {
+      const updated = await timelineService.applyMutation(timeline.id, timeline.revision, {
+        type: 'move_clip',
+        clip_id: clip.id,
+        new_start_ms: newStart,
+      });
+      setTimeline(updated);
+      setErrorMessage(null);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleTrimClip = async (clip: TimelineClip, inDeltaMs: number, outDeltaMs: number) => {
+    if (!timeline) return;
+    const newIn = Math.max(0, clip.sourceInMs + inDeltaMs);
+    const newOut = Math.max(newIn + 100, clip.sourceOutMs + outDeltaMs);
+    try {
+      const updated = await timelineService.applyMutation(timeline.id, timeline.revision, {
+        type: 'trim_clip',
+        clip_id: clip.id,
+        source_in_ms: newIn,
+        source_out_ms: newOut,
+      });
+      setTimeline(updated);
+      setErrorMessage(null);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleSetClipVolume = async (clip: TimelineClip, volume: number) => {
+    if (!timeline) return;
+    try {
+      const updated = await timelineService.applyMutation(timeline.id, timeline.revision, {
+        type: 'set_clip_audio',
+        clip_id: clip.id,
+        volume,
+        muted: clip.muted,
+      });
+      setTimeline(updated);
+      setErrorMessage(null);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const handleDeleteTrack = async (trackId: string) => {
     if (!timeline) return;
     try {
@@ -259,6 +309,11 @@ export const EditorView: React.FC<EditorViewProps> = ({
         currentTimeMs >= c.timelineStartMs &&
         currentTimeMs < c.timelineStartMs + (c.sourceOutMs - c.sourceInMs)
     ) || null;
+
+  const selectedClip =
+    timeline.tracks
+      .flatMap((t) => t.clips)
+      .find((c) => c.id === selectedClipId) || null;
 
   return (
     <div className="flex flex-col h-full">
@@ -301,12 +356,124 @@ export const EditorView: React.FC<EditorViewProps> = ({
           />
         }
         timelineTracks={
-          <div className="min-w-full divide-y divide-gray-800">
-            {timeline.tracks.length === 0 ? (
-              <div className="p-8 text-center text-xs text-gray-500 font-mono">
-                No tracks yet. Click &quot;+ Video Track&quot; or &quot;+ Audio Track&quot; above to begin.
+          <div className="min-w-full flex flex-col">
+            {selectedClip && (
+              <div className="bg-gray-900/90 border-b border-gray-800 px-4 py-2 flex flex-wrap items-center justify-between gap-3 text-xs font-mono sticky top-0 z-20">
+                <div className="flex items-center gap-3">
+                  <span className="text-gray-400 font-semibold">
+                    Clip: <span className="text-white">{selectedClip.artifactId.slice(0, 8)}</span>
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <span className="text-gray-500">Move:</span>
+                    <button
+                      onClick={() => handleMoveClip(selectedClip, -500)}
+                      className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 rounded text-gray-200 cursor-pointer"
+                    >
+                      -0.5s
+                    </button>
+                    <span className="text-indigo-400">
+                      {(selectedClip.timelineStartMs / 1000).toFixed(1)}s
+                    </span>
+                    <button
+                      onClick={() => handleMoveClip(selectedClip, 500)}
+                      className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 rounded text-gray-200 cursor-pointer"
+                    >
+                      +0.5s
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-gray-500">Trim In:</span>
+                    <button
+                      onClick={() => handleTrimClip(selectedClip, -500, 0)}
+                      className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 rounded text-gray-200 cursor-pointer"
+                    >
+                      -0.5s
+                    </button>
+                    <span className="text-emerald-400">
+                      {(selectedClip.sourceInMs / 1000).toFixed(1)}s
+                    </span>
+                    <button
+                      onClick={() => handleTrimClip(selectedClip, 500, 0)}
+                      className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 rounded text-gray-200 cursor-pointer"
+                    >
+                      +0.5s
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-gray-500">Trim Out:</span>
+                    <button
+                      onClick={() => handleTrimClip(selectedClip, 0, -500)}
+                      className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 rounded text-gray-200 cursor-pointer"
+                    >
+                      -0.5s
+                    </button>
+                    <span className="text-emerald-400">
+                      {(selectedClip.sourceOutMs / 1000).toFixed(1)}s
+                    </span>
+                    <button
+                      onClick={() => handleTrimClip(selectedClip, 0, 500)}
+                      className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 rounded text-gray-200 cursor-pointer"
+                    >
+                      +0.5s
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-gray-500">Vol:</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={2}
+                      step={0.1}
+                      value={selectedClip.volume}
+                      onChange={(e) => handleSetClipVolume(selectedClip, Number(e.target.value))}
+                      className="w-16 h-1 bg-gray-800 rounded accent-indigo-500 cursor-pointer"
+                    />
+                    <span className="text-gray-300 w-8">
+                      {(selectedClip.volume * 100).toFixed(0)}%
+                    </span>
+                  </div>
+
+                  <button
+                    onClick={() => handleToggleClipMute(selectedClip)}
+                    className={`px-2 py-0.5 rounded text-xs transition-colors cursor-pointer ${
+                      selectedClip.muted
+                        ? 'bg-red-900/80 text-red-200'
+                        : 'bg-gray-800 hover:bg-gray-700 text-gray-200'
+                    }`}
+                  >
+                    {selectedClip.muted ? 'Muted (Audio)' : 'Mute Audio'}
+                  </button>
+                  <button
+                    onClick={() => handleSplitClip(selectedClip)}
+                    className="px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-200 cursor-pointer"
+                  >
+                    Split
+                  </button>
+                  <button
+                    onClick={() => handleDeleteClip(selectedClip.id)}
+                    className="px-2 py-0.5 rounded bg-red-950/80 hover:bg-red-900 text-red-300 cursor-pointer"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    onClick={() => setSelectedClipId(null)}
+                    className="text-gray-500 hover:text-gray-300 px-1 cursor-pointer"
+                    title="Deselect"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
-            ) : (
+            )}
+            <div className="min-w-full divide-y divide-gray-800">
+              {timeline.tracks.length === 0 ? (
+                <div className="p-8 text-center text-xs text-gray-500 font-mono">
+                  No tracks yet. Click &quot;+ Video Track&quot; or &quot;+ Audio Track&quot; above to begin.
+                </div>
+              ) : (
               timeline.tracks.map((track) => (
                 <TimelineTrackView
                   key={track.id}
@@ -321,7 +488,8 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   onTrackLaneClick={setCurrentTimeMs}
                 />
               ))
-            )}
+              )}
+            </div>
           </div>
         }
       />

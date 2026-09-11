@@ -323,7 +323,22 @@ pub fn start_local_render_worker(
         is_mock,
     ));
 
-    let join_handle = tokio::spawn(async move {
+    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+
+    let rt_handle = match tokio::runtime::Handle::try_current() {
+        Ok(h) => h,
+        Err(_) => RUNTIME
+            .get_or_init(|| {
+                tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to initialize background tokio runtime for render worker")
+            })
+            .handle()
+            .clone(),
+    };
+
+    let join_handle = rt_handle.spawn(async move {
         loop {
             if *shutdown_rx.borrow() {
                 break;
