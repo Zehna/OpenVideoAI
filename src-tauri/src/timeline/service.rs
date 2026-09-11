@@ -452,4 +452,189 @@ impl TimelineService {
             updated_at: updated_at.to_string(),
         })
     }
+
+    pub fn undo(
+        &self,
+        conn: &mut Connection,
+        timeline_id: &str,
+        expected_revision: i64,
+    ) -> Result<TimelineDocument, TimelineError> {
+        let current = TimelineRepository::get_by_id(conn, timeline_id)?
+            .ok_or_else(|| TimelineError::TimelineNotFound(timeline_id.to_string()))?;
+
+        if current.revision != expected_revision {
+            return Err(TimelineError::RevisionConflict {
+                expected: expected_revision,
+                actual: current.revision,
+            });
+        }
+
+        let cursor: i64 = conn.query_row(
+            "SELECT history_cursor FROM timelines WHERE id = ?1;",
+            params![timeline_id],
+            |r| r.get(0),
+        )?;
+
+        if cursor <= 0 {
+            return Err(TimelineError::InvalidOperation(
+                "Nothing to undo".to_string(),
+            ));
+        }
+
+        let target_cursor = cursor - 1;
+        let snapshot_json: String = conn.query_row(
+            "SELECT snapshot_json FROM timeline_history WHERE timeline_id = ?1 AND history_index = ?2;",
+            params![timeline_id, target_cursor],
+            |r| r.get(0),
+        )?;
+
+        let parsed: serde_json::Value = serde_json::from_str(&snapshot_json)
+            .map_err(|e| TimelineError::Database(format!("Corrupt snapshot JSON: {}", e)))?;
+        let restored_doc: TimelineDocument = serde_json::from_value(parsed["timeline"].clone())
+            .map_err(|e| TimelineError::Database(format!("Invalid snapshot format: {}", e)))?;
+
+        let new_revision = current.revision + 1;
+        let now = Utc::now().to_rfc3339();
+        let tx = conn.transaction()?;
+
+        // Transactionally restore state from snapshot
+        Self::restore_timeline_state(&tx, timeline_id, &restored_doc)?;
+
+        tx.execute(
+            "UPDATE timelines SET revision = ?1, history_cursor = ?2, updated_at = ?3 WHERE id = ?4;",
+            params![new_revision, target_cursor, now, timeline_id],
+        )?;
+
+        tx.commit()?;
+
+        let mut final_doc = restored_doc;
+        final_doc.revision = new_revision;
+        final_doc.updated_at = now;
+        Ok(final_doc)
+    }
+
+    pub fn redo(
+        &self,
+        conn: &mut Connection,
+        timeline_id: &str,
+        expected_revision: i64,
+    ) -> Result<TimelineDocument, TimelineError> {
+        let current = TimelineRepository::get_by_id(conn, timeline_id)?
+            .ok_or_else(|| TimelineError::TimelineNotFound(timeline_id.to_string()))?;
+
+        if current.revision != expected_revision {
+            return Err(TimelineError::RevisionConflict {
+                expected: expected_revision,
+                actual: current.revision,
+            });
+        }
+
+        let cursor: i64 = conn.query_row(
+            "SELECT history_cursor FROM timelines WHERE id = ?1;",
+            params![timeline_id],
+            |r| r.get(0),
+        )?;
+
+        let target_cursor = cursor + 1;
+        let snapshot_opt: Result<String, rusqlite::Error> = conn.query_row(
+            "SELECT snapshot_json FROM timeline_history WHERE timeline_id = ?1 AND history_index = ?2;",
+            params![timeline_id, target_cursor],
+            |r| r.get(0),
+        );
+
+        let snapshot_json = match snapshot_opt {
+            Ok(s) => s,
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                return Err(TimelineError::InvalidOperation(
+                    "Nothing to redo".to_string(),
+                ));
+            }
+            Err(e) => return Err(TimelineError::Database(e.to_string())),
+        };
+
+        let parsed: serde_json::Value = serde_json::from_str(&snapshot_json)
+            .map_err(|e| TimelineError::Database(format!("Corrupt snapshot JSON: {}", e)))?;
+        let restored_doc: TimelineDocument = serde_json::from_value(parsed["timeline"].clone())
+            .map_err(|e| TimelineError::Database(format!("Invalid snapshot format: {}", e)))?;
+
+        let new_revision = current.revision + 1;
+        let now = Utc::now().to_rfc3339();
+        let tx = conn.transaction()?;
+
+        Self::restore_timeline_state(&tx, timeline_id, &restored_doc)?;
+
+        tx.execute(
+            "UPDATE timelines SET revision = ?1, history_cursor = ?2, updated_at = ?3 WHERE id = ?4;",
+            params![new_revision, target_cursor, now, timeline_id],
+        )?;
+
+        tx.commit()?;
+
+        let mut final_doc = restored_doc;
+        final_doc.revision = new_revision;
+        final_doc.updated_at = now;
+        Ok(final_doc)
+    }
+
+    fn restore_timeline_state(
+        tx: &Transaction,
+        timeline_id: &str,
+        doc: &TimelineDocument,
+    ) -> Result<(), TimelineError> {
+        // Clear current tracks (cascades to clips)
+        tx.execute(
+            "DELETE FROM timeline_tracks WHERE timeline_id = ?1;",
+            params![timeline_id],
+        )?;
+
+        // Update canvas
+        tx.execute(
+            "UPDATE timelines SET width = ?1, height = ?2, frame_rate = ?3 WHERE id = ?4;",
+            params![
+                doc.canvas.width,
+                doc.canvas.height,
+                doc.canvas.frame_rate,
+                timeline_id
+            ],
+        )?;
+
+        // Re-insert tracks and clips
+        for track in &doc.tracks {
+            tx.execute(
+                "INSERT INTO timeline_tracks (id, timeline_id, kind, order_index, name, muted)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
+                params![
+                    track.id,
+                    timeline_id,
+                    track.kind.as_str(),
+                    track.order,
+                    track.name,
+                    track.muted as i32
+                ],
+            )?;
+
+            for clip in &track.clips {
+                tx.execute(
+                    "INSERT INTO timeline_clips (id, track_id, artifact_id, source_in_ms, source_out_ms, timeline_start_ms, volume, muted, position_x, position_y, scale, rotation_deg, opacity)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13);",
+                    params![
+                        clip.id,
+                        track.id,
+                        clip.artifact_id,
+                        clip.source_in_ms,
+                        clip.source_out_ms,
+                        clip.timeline_start_ms,
+                        clip.volume,
+                        clip.muted as i32,
+                        clip.transform.x,
+                        clip.transform.y,
+                        clip.transform.scale,
+                        clip.transform.rotation_deg,
+                        clip.transform.opacity,
+                    ],
+                )?;
+            }
+        }
+        Ok(())
+    }
 }
