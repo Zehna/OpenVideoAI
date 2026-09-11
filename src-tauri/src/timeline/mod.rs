@@ -1,6 +1,7 @@
 pub mod error;
 pub mod model;
 pub mod mutation;
+pub mod preview;
 pub mod repository;
 pub mod service;
 

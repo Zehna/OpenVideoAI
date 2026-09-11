@@ -14,6 +14,7 @@ use tauri::Manager;
 
 pub struct AppState {
     pub health_service: health::HealthService,
+    pub db_manager: Arc<db::DbManager>,
     pub project_service: Arc<projects::service::ProjectService>,
     pub artifact_importer: Arc<artifacts::importer::ArtifactImporter>,
     pub artifact_resolver: Arc<artifacts::resolver::ArtifactResolver>,
@@ -34,6 +35,45 @@ pub fn run() {
     tracing::info!("Starting OpenVideoAI desktop application");
 
     tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol(
+            "openvideoai-media",
+            move |ctx, req, responder| {
+                let app_handle = ctx.app_handle();
+                let state = app_handle.state::<AppState>();
+                let uri_str = req.uri().to_string();
+                let artifact_id = uri_str
+                    .strip_prefix("openvideoai-media://artifact/")
+                    .or_else(|| uri_str.strip_prefix("openvideoai-media://localhost/artifact/"))
+                    .unwrap_or("")
+                    .trim_matches('/');
+                let range = req.headers().get("range").and_then(|v| v.to_str().ok());
+
+                let resp = match state.db_manager.conn() {
+                    Ok(conn) => match timeline::preview::handle_preview_range_request(
+                        artifact_id,
+                        range,
+                        &state.artifact_resolver,
+                        &conn,
+                    ) {
+                        Ok(pr) => pr.into_http_response().unwrap_or_else(|e| {
+                            tauri::http::Response::builder()
+                                .status(500)
+                                .body(e.into_bytes())
+                                .unwrap()
+                        }),
+                        Err(e) => tauri::http::Response::builder()
+                            .status(500)
+                            .body(e.into_bytes())
+                            .unwrap(),
+                    },
+                    Err(e) => tauri::http::Response::builder()
+                        .status(500)
+                        .body(e.to_string().into_bytes())
+                        .unwrap(),
+                };
+                responder.respond(resp);
+            },
+        )
         .setup(|app| {
             let app_data_dir = app
                 .path()
@@ -80,6 +120,7 @@ pub fn run() {
 
             app.manage(AppState {
                 health_service,
+                db_manager,
                 project_service,
                 artifact_importer,
                 artifact_resolver,
