@@ -144,6 +144,65 @@ pub static MIGRATIONS: &[Migration] = &[
             CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency_key ON jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
         ",
     },
+    Migration {
+        version: 5,
+        name: "media_and_timeline_core",
+        sql: "
+            CREATE TABLE IF NOT EXISTS timelines (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                revision INTEGER NOT NULL DEFAULT 1,
+                width INTEGER NOT NULL,
+                height INTEGER NOT NULL,
+                frame_rate REAL NOT NULL,
+                history_cursor INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS timeline_tracks (
+                id TEXT PRIMARY KEY,
+                timeline_id TEXT NOT NULL REFERENCES timelines(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                order_index INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                muted INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(timeline_id, order_index)
+            );
+
+            CREATE TABLE IF NOT EXISTS timeline_clips (
+                id TEXT PRIMARY KEY,
+                track_id TEXT NOT NULL REFERENCES timeline_tracks(id) ON DELETE CASCADE,
+                artifact_id TEXT NOT NULL REFERENCES artifacts(id),
+                source_in_ms INTEGER NOT NULL,
+                source_out_ms INTEGER NOT NULL,
+                timeline_start_ms INTEGER NOT NULL,
+                volume REAL NOT NULL DEFAULT 1.0,
+                muted INTEGER NOT NULL DEFAULT 0,
+                position_x REAL NOT NULL DEFAULT 0.0,
+                position_y REAL NOT NULL DEFAULT 0.0,
+                scale REAL NOT NULL DEFAULT 1.0,
+                rotation_deg REAL NOT NULL DEFAULT 0.0,
+                opacity REAL NOT NULL DEFAULT 1.0
+            );
+
+            CREATE TABLE IF NOT EXISTS timeline_history (
+                timeline_id TEXT NOT NULL REFERENCES timelines(id) ON DELETE CASCADE,
+                history_index INTEGER NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                operation_type TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(timeline_id, history_index)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_timelines_project_id ON timelines(project_id);
+            CREATE INDEX IF NOT EXISTS idx_timeline_tracks_timeline_order ON timeline_tracks(timeline_id, order_index);
+            CREATE INDEX IF NOT EXISTS idx_timeline_clips_track_start ON timeline_clips(track_id, timeline_start_ms);
+            CREATE INDEX IF NOT EXISTS idx_timeline_clips_artifact_id ON timeline_clips(artifact_id);
+            CREATE INDEX IF NOT EXISTS idx_timeline_history_timeline_index ON timeline_history(timeline_id, history_index);
+        ",
+    },
 ];
 
 pub fn run_all_migrations(conn: &mut Connection) -> Result<(), rusqlite::Error> {
