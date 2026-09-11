@@ -100,6 +100,16 @@ impl JobManager {
         JobRepository::acquire_lease(&conn, &self.worker_id, lease_duration_secs)
     }
 
+    pub fn acquire_next_job_for_type(
+        &self,
+        job_type: &str,
+        lease_duration_secs: i64,
+    ) -> Result<Option<Job>, JobError> {
+        let _ = self.reap_expired_leases();
+        let conn = self.db.conn()?;
+        JobRepository::acquire_lease_for_type(&conn, &self.worker_id, job_type, lease_duration_secs)
+    }
+
     pub fn heartbeat(&self, job_id: &str, lease_duration_secs: i64) -> Result<bool, JobError> {
         self.heartbeat_with_token(job_id, None, lease_duration_secs)
     }

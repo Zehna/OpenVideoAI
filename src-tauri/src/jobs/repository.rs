@@ -226,6 +226,68 @@ impl JobRepository {
         }
     }
 
+    /// Acquire next runnable job of a specific job_type.
+    pub fn acquire_lease_for_type(
+        conn: &Connection,
+        worker_id: &str,
+        job_type: &str,
+        lease_duration_secs: i64,
+    ) -> Result<Option<Job>, JobError> {
+        let now_dt = Utc::now();
+        let now = now_dt.to_rfc3339();
+        let lease_expires_at =
+            (now_dt + chrono::Duration::seconds(lease_duration_secs)).to_rfc3339();
+
+        loop {
+            let candidate_id: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM jobs 
+                     WHERE job_type = ?1 
+                       AND (status = 'queued' OR (status = 'retryable' AND updated_at <= ?2))
+                     ORDER BY priority DESC, created_at ASC 
+                     LIMIT 1",
+                    params![job_type, now],
+                    |row| row.get(0),
+                )
+                .optional()?;
+
+            let Some(job_id) = candidate_id else {
+                return Ok(None);
+            };
+
+            let lease_token = uuid::Uuid::new_v4().to_string();
+
+            let rows_affected = conn.execute(
+                "UPDATE jobs 
+                 SET status = 'running', 
+                     leased_by = ?1, 
+                     lease_token = ?2,
+                     lease_expires_at = ?3, 
+                     started_at = COALESCE(started_at, ?4), 
+                     updated_at = ?4 
+                 WHERE id = ?5 AND job_type = ?6 AND (
+                     status = 'queued' 
+                     OR (status = 'retryable' AND updated_at <= ?4)
+                 )",
+                params![
+                    worker_id,
+                    lease_token,
+                    lease_expires_at,
+                    now,
+                    job_id,
+                    job_type
+                ],
+            )?;
+
+            if rows_affected == 1 {
+                tracing::info!(job_id = %job_id, worker = %worker_id, lease_token = %lease_token, job_type = %job_type, "Acquired job lease for type");
+                let job =
+                    Self::get_by_id(conn, &job_id)?.ok_or_else(|| JobError::NotFound(job_id))?;
+                return Ok(Some(job));
+            }
+        }
+    }
+
     /// Extend lease for active worker while work is in progress.
     pub fn heartbeat(
         conn: &Connection,
