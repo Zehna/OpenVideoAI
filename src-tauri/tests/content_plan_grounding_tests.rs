@@ -39,7 +39,8 @@ fn create_valid_grounded_plan() -> ContentPlan {
         tone: "informative".to_string(),
         target_duration_ms: 60_000,
         estimated_duration_ms: 60_000,
-        full_narration: "Mars has captured our imagination.\n\nPerseverance explores Jezero Crater.".to_string(),
+        full_narration:
+            "Mars has captured our imagination.\n\nPerseverance explores Jezero Crater.".to_string(),
         scenes: vec![
             ContentScene {
                 id: "scene-1".to_string(),
@@ -52,16 +53,14 @@ fn create_valid_grounded_plan() -> ContentPlan {
                 stock_search_queries: vec!["Mars red planet".to_string()],
                 image_prompt: None,
                 video_prompt: None,
-                claims: vec![
-                    Claim {
-                        id: "claim-1".to_string(),
-                        text: "Mars is visible in the night sky.".to_string(),
-                        grounding_status: GroundingStatus::ModelKnowledge,
-                        source_refs: vec![],
-                        grounding_valid: true,
-                        note: None,
-                    },
-                ],
+                claims: vec![Claim {
+                    id: "claim-1".to_string(),
+                    text: "Mars is visible in the night sky.".to_string(),
+                    grounding_status: GroundingStatus::ModelKnowledge,
+                    source_refs: vec![],
+                    grounding_valid: true,
+                    note: None,
+                }],
                 source_refs: vec![],
             },
             ContentScene {
@@ -75,41 +74,33 @@ fn create_valid_grounded_plan() -> ContentPlan {
                 stock_search_queries: vec!["Perseverance rover".to_string()],
                 image_prompt: None,
                 video_prompt: None,
-                claims: vec![
-                    Claim {
-                        id: "claim-2".to_string(),
-                        text: "Perseverance explores Jezero Crater.".to_string(),
-                        grounding_status: GroundingStatus::Supported,
-                        source_refs: vec![
-                            SourceRef {
-                                source_id: "src-1".to_string(),
-                                locator: Some("p. 4".to_string()),
-                                excerpt_hash: Some("ex1".to_string()),
-                                note: None,
-                            },
-                        ],
-                        grounding_valid: true,
-                        note: None,
-                    },
-                ],
-                source_refs: vec![
-                    SourceRef {
+                claims: vec![Claim {
+                    id: "claim-2".to_string(),
+                    text: "Perseverance explores Jezero Crater.".to_string(),
+                    grounding_status: GroundingStatus::Supported,
+                    source_refs: vec![SourceRef {
                         source_id: "src-1".to_string(),
                         locator: Some("p. 4".to_string()),
                         excerpt_hash: Some("ex1".to_string()),
                         note: None,
-                    },
-                ],
+                    }],
+                    grounding_valid: true,
+                    note: None,
+                }],
+                source_refs: vec![SourceRef {
+                    source_id: "src-1".to_string(),
+                    locator: Some("p. 4".to_string()),
+                    excerpt_hash: Some("ex1".to_string()),
+                    note: None,
+                }],
             },
         ],
-        source_refs: vec![
-            SourceRef {
-                source_id: "src-1".to_string(),
-                locator: Some("p. 4".to_string()),
-                excerpt_hash: Some("ex1".to_string()),
-                note: None,
-            },
-        ],
+        source_refs: vec![SourceRef {
+            source_id: "src-1".to_string(),
+            locator: Some("p. 4".to_string()),
+            excerpt_hash: Some("ex1".to_string()),
+            note: None,
+        }],
         generation_metadata: None,
         created_at: "2026-09-12T10:00:00Z".to_string(),
         updated_at: "2026-09-12T10:00:00Z".to_string(),
@@ -227,7 +218,10 @@ fn test_validate_grounding_model_knowledge_empty_sources_valid() {
     let sources = create_test_sources();
 
     // Scene 0 Claim 0 is ModelKnowledge with empty source_refs
-    assert_eq!(plan.scenes[0].claims[0].grounding_status, GroundingStatus::ModelKnowledge);
+    assert_eq!(
+        plan.scenes[0].claims[0].grounding_status,
+        GroundingStatus::ModelKnowledge
+    );
     assert!(plan.scenes[0].claims[0].source_refs.is_empty());
 
     assert!(validate_grounding(&plan, &sources).is_ok());
@@ -309,25 +303,35 @@ fn test_invalidate_manual_grounding_narration_edit() {
     });
 
     // Edit narration of scene 2
-    edited.scenes[1].narration = "Perseverance thoroughly explores Jezero Crater with new instruments.".to_string();
+    edited.scenes[1].narration =
+        "Perseverance thoroughly explores Jezero Crater with new instruments.".to_string();
 
     invalidate_manual_grounding(&base, &mut edited);
 
     // Scene 2 claims: both must be Modified and grounding_valid = false
-    assert_eq!(edited.scenes[1].claims[0].grounding_status, GroundingStatus::Modified);
-    assert_eq!(edited.scenes[1].claims[0].grounding_valid, false);
+    assert_eq!(
+        edited.scenes[1].claims[0].grounding_status,
+        GroundingStatus::Modified
+    );
+    assert!(!edited.scenes[1].claims[0].grounding_valid);
     // Historical source refs must be preserved
     assert_eq!(edited.scenes[1].claims[0].source_refs.len(), 1);
     assert_eq!(edited.scenes[1].claims[0].source_refs[0].source_id, "src-1");
 
-    assert_eq!(edited.scenes[1].claims[1].grounding_status, GroundingStatus::Modified);
-    assert_eq!(edited.scenes[1].claims[1].grounding_valid, false);
+    assert_eq!(
+        edited.scenes[1].claims[1].grounding_status,
+        GroundingStatus::Modified
+    );
+    assert!(!edited.scenes[1].claims[1].grounding_valid);
     assert_eq!(edited.scenes[1].claims[1].source_refs.len(), 1);
     assert_eq!(edited.scenes[1].claims[1].source_refs[0].source_id, "src-2");
 
     // Scene 1 (narration unchanged) claims must remain untouched
-    assert_eq!(edited.scenes[0].claims[0].grounding_status, GroundingStatus::ModelKnowledge);
-    assert_eq!(edited.scenes[0].claims[0].grounding_valid, true);
+    assert_eq!(
+        edited.scenes[0].claims[0].grounding_status,
+        GroundingStatus::ModelKnowledge
+    );
+    assert!(edited.scenes[0].claims[0].grounding_valid);
 }
 
 #[test]
@@ -352,25 +356,35 @@ fn test_invalidate_manual_grounding_direct_claim_text_edit() {
     let mut edited = base.clone();
 
     // Narration is UNCHANGED. Edit only claim-2's text:
-    edited.scenes[1].claims[0].text = "Perseverance discovered organic molecules in Jezero Crater.".to_string();
+    edited.scenes[1].claims[0].text =
+        "Perseverance discovered organic molecules in Jezero Crater.".to_string();
 
     invalidate_manual_grounding(&base, &mut edited);
 
     // claim-2 text was modified: must be marked Modified, grounding_valid = false
-    assert_eq!(edited.scenes[1].claims[0].grounding_status, GroundingStatus::Modified);
-    assert_eq!(edited.scenes[1].claims[0].grounding_valid, false);
+    assert_eq!(
+        edited.scenes[1].claims[0].grounding_status,
+        GroundingStatus::Modified
+    );
+    assert!(!edited.scenes[1].claims[0].grounding_valid);
     assert_eq!(edited.scenes[1].claims[0].source_refs.len(), 1);
     assert_eq!(edited.scenes[1].claims[0].source_refs[0].source_id, "src-1");
 
     // claim-2b text was NOT modified: must remain Supported, grounding_valid = true
-    assert_eq!(edited.scenes[1].claims[1].grounding_status, GroundingStatus::Supported);
-    assert_eq!(edited.scenes[1].claims[1].grounding_valid, true);
+    assert_eq!(
+        edited.scenes[1].claims[1].grounding_status,
+        GroundingStatus::Supported
+    );
+    assert!(edited.scenes[1].claims[1].grounding_valid);
     assert_eq!(edited.scenes[1].claims[1].source_refs.len(), 1);
     assert_eq!(edited.scenes[1].claims[1].source_refs[0].source_id, "src-2");
 
     // Scene 1 claims also unchanged
-    assert_eq!(edited.scenes[0].claims[0].grounding_status, GroundingStatus::ModelKnowledge);
-    assert_eq!(edited.scenes[0].claims[0].grounding_valid, true);
+    assert_eq!(
+        edited.scenes[0].claims[0].grounding_status,
+        GroundingStatus::ModelKnowledge
+    );
+    assert!(edited.scenes[0].claims[0].grounding_valid);
 }
 
 #[test]
@@ -379,7 +393,8 @@ fn test_invalidate_manual_grounding_non_factual_edits_preserve_grounding() {
     let mut edited = base.clone();
 
     // Modify ONLY non-factual fields in scene 2
-    edited.scenes[1].visual_description = "Ultra high-res cinematic aerial view of rover.".to_string();
+    edited.scenes[1].visual_description =
+        "Ultra high-res cinematic aerial view of rover.".to_string();
     edited.scenes[1].media_intent = vec![MediaIntent::AiVideo, MediaIntent::StockVideo];
     edited.scenes[1].stock_search_queries = vec!["Mars helicopter Ingenuity".to_string()];
     edited.scenes[1].image_prompt = Some("Rover digging on Mars surface".to_string());
@@ -393,13 +408,19 @@ fn test_invalidate_manual_grounding_non_factual_edits_preserve_grounding() {
     invalidate_manual_grounding(&base, &mut edited);
 
     // Claim on scene 2 must remain completely intact
-    assert_eq!(edited.scenes[1].claims[0].grounding_status, GroundingStatus::Supported);
-    assert_eq!(edited.scenes[1].claims[0].grounding_valid, true);
+    assert_eq!(
+        edited.scenes[1].claims[0].grounding_status,
+        GroundingStatus::Supported
+    );
+    assert!(edited.scenes[1].claims[0].grounding_valid);
     assert_eq!(edited.scenes[1].claims[0].source_refs.len(), 1);
 
     // Scene 1 also untouched
-    assert_eq!(edited.scenes[0].claims[0].grounding_status, GroundingStatus::ModelKnowledge);
-    assert_eq!(edited.scenes[0].claims[0].grounding_valid, true);
+    assert_eq!(
+        edited.scenes[0].claims[0].grounding_status,
+        GroundingStatus::ModelKnowledge
+    );
+    assert!(edited.scenes[0].claims[0].grounding_valid);
 }
 
 #[test]
@@ -425,12 +446,18 @@ fn test_invalidate_manual_grounding_new_claim_in_existing_scene() {
     invalidate_manual_grounding(&base, &mut edited);
 
     // Existing claim-2 unchanged: Supported, valid = true
-    assert_eq!(edited.scenes[1].claims[0].grounding_status, GroundingStatus::Supported);
-    assert_eq!(edited.scenes[1].claims[0].grounding_valid, true);
+    assert_eq!(
+        edited.scenes[1].claims[0].grounding_status,
+        GroundingStatus::Supported
+    );
+    assert!(edited.scenes[1].claims[0].grounding_valid);
 
     // New claim-new: must be marked Modified, valid = false
-    assert_eq!(edited.scenes[1].claims[1].grounding_status, GroundingStatus::Modified);
-    assert_eq!(edited.scenes[1].claims[1].grounding_valid, false);
+    assert_eq!(
+        edited.scenes[1].claims[1].grounding_status,
+        GroundingStatus::Modified
+    );
+    assert!(!edited.scenes[1].claims[1].grounding_valid);
 }
 
 #[test]
@@ -450,33 +477,40 @@ fn test_invalidate_manual_grounding_new_scene() {
         stock_search_queries: vec![],
         image_prompt: Some("Futuristic colony on Mars".to_string()),
         video_prompt: None,
-        claims: vec![
-            Claim {
-                id: "claim-future".to_string(),
-                text: "Human missions are planned for the 2030s.".to_string(),
-                grounding_status: GroundingStatus::Supported,
-                source_refs: vec![SourceRef {
-                    source_id: "src-1".to_string(),
-                    locator: None,
-                    excerpt_hash: None,
-                    note: None,
-                }],
-                grounding_valid: true,
+        claims: vec![Claim {
+            id: "claim-future".to_string(),
+            text: "Human missions are planned for the 2030s.".to_string(),
+            grounding_status: GroundingStatus::Supported,
+            source_refs: vec![SourceRef {
+                source_id: "src-1".to_string(),
+                locator: None,
+                excerpt_hash: None,
                 note: None,
-            },
-        ],
+            }],
+            grounding_valid: true,
+            note: None,
+        }],
         source_refs: vec![],
     });
 
     invalidate_manual_grounding(&base, &mut edited);
 
     // New scene claims must be marked Modified and valid = false
-    assert_eq!(edited.scenes[2].claims[0].grounding_status, GroundingStatus::Modified);
-    assert_eq!(edited.scenes[2].claims[0].grounding_valid, false);
+    assert_eq!(
+        edited.scenes[2].claims[0].grounding_status,
+        GroundingStatus::Modified
+    );
+    assert!(!edited.scenes[2].claims[0].grounding_valid);
 
     // Existing scenes untouched
-    assert_eq!(edited.scenes[0].claims[0].grounding_status, GroundingStatus::ModelKnowledge);
-    assert_eq!(edited.scenes[0].claims[0].grounding_valid, true);
-    assert_eq!(edited.scenes[1].claims[0].grounding_status, GroundingStatus::Supported);
-    assert_eq!(edited.scenes[1].claims[0].grounding_valid, true);
+    assert_eq!(
+        edited.scenes[0].claims[0].grounding_status,
+        GroundingStatus::ModelKnowledge
+    );
+    assert!(edited.scenes[0].claims[0].grounding_valid);
+    assert_eq!(
+        edited.scenes[1].claims[0].grounding_status,
+        GroundingStatus::Supported
+    );
+    assert!(edited.scenes[1].claims[0].grounding_valid);
 }

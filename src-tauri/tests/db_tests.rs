@@ -789,9 +789,18 @@ fn test_migration_6_schema_and_revision_scoped_sources() {
         .map(|r| r.unwrap())
         .collect();
 
-    assert!(tables.contains(&"content_plans".to_string()), "content_plans table missing");
-    assert!(tables.contains(&"content_plan_revisions".to_string()), "content_plan_revisions table missing");
-    assert!(tables.contains(&"content_plan_sources".to_string()), "content_plan_sources table missing");
+    assert!(
+        tables.contains(&"content_plans".to_string()),
+        "content_plans table missing"
+    );
+    assert!(
+        tables.contains(&"content_plan_revisions".to_string()),
+        "content_plan_revisions table missing"
+    );
+    assert!(
+        tables.contains(&"content_plan_sources".to_string()),
+        "content_plan_sources table missing"
+    );
 
     // 2. Insert project and content plan with title 'Plan'
     conn.execute(
@@ -846,29 +855,41 @@ fn test_migration_6_schema_and_revision_scoped_sources() {
     ).expect("query rev 2 source snapshot");
     assert_eq!(snap_v2, "v2");
 
-    let total_sources: i64 = conn.query_row(
-        "SELECT count(*) FROM content_plan_sources WHERE plan_id = 'cp1';",
-        [],
-        |r| r.get(0),
-    ).expect("count sources");
-    assert_eq!(total_sources, 2, "Both revision-scoped sources must exist simultaneously");
+    let total_sources: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM content_plan_sources WHERE plan_id = 'cp1';",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count sources");
+    assert_eq!(
+        total_sources, 2,
+        "Both revision-scoped sources must exist simultaneously"
+    );
 
     // 6. Assert deleting revision 2 cascades only revision 2 source, leaving revision 1 intact
-    conn.execute("DELETE FROM content_plan_revisions WHERE plan_id = 'cp1' AND revision = 2;", [])
-        .expect("delete revision 2");
-
-    let rev2_count: i64 = conn.query_row(
-        "SELECT count(*) FROM content_plan_sources WHERE plan_id = 'cp1' AND revision = 2;",
+    conn.execute(
+        "DELETE FROM content_plan_revisions WHERE plan_id = 'cp1' AND revision = 2;",
         [],
-        |r| r.get(0),
-    ).expect("count rev 2 sources");
+    )
+    .expect("delete revision 2");
+
+    let rev2_count: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM content_plan_sources WHERE plan_id = 'cp1' AND revision = 2;",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count rev 2 sources");
     assert_eq!(rev2_count, 0, "Revision 2 source must be cascade deleted");
 
-    let rev1_count: i64 = conn.query_row(
-        "SELECT count(*) FROM content_plan_sources WHERE plan_id = 'cp1' AND revision = 1;",
-        [],
-        |r| r.get(0),
-    ).expect("count rev 1 sources");
+    let rev1_count: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM content_plan_sources WHERE plan_id = 'cp1' AND revision = 1;",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count rev 1 sources");
     assert_eq!(rev1_count, 1, "Revision 1 source must remain intact");
 
     let snap_v1_after: String = conn.query_row(
@@ -879,18 +900,23 @@ fn test_migration_6_schema_and_revision_scoped_sources() {
     assert_eq!(snap_v1_after, "v1");
 
     // 7. Verify deleting content plan cascades to revisions and sources
-    conn.execute("DELETE FROM content_plans WHERE id = 'cp1';", []).expect("delete content plan");
-    let remaining_revs: i64 = conn.query_row(
-        "SELECT count(*) FROM content_plan_revisions WHERE plan_id = 'cp1';",
-        [],
-        |r| r.get(0),
-    ).expect("count remaining revs");
+    conn.execute("DELETE FROM content_plans WHERE id = 'cp1';", [])
+        .expect("delete content plan");
+    let remaining_revs: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM content_plan_revisions WHERE plan_id = 'cp1';",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count remaining revs");
     assert_eq!(remaining_revs, 0);
-    let remaining_sources: i64 = conn.query_row(
-        "SELECT count(*) FROM content_plan_sources WHERE plan_id = 'cp1';",
-        [],
-        |r| r.get(0),
-    ).expect("count remaining sources");
+    let remaining_sources: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM content_plan_sources WHERE plan_id = 'cp1';",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count remaining sources");
     assert_eq!(remaining_sources, 0);
 }
 
@@ -1184,4 +1210,3 @@ fn test_migration_5_to_6_upgrade_regression() {
         [],
     ).expect("insert source");
 }
-

@@ -157,7 +157,9 @@ fn test_planning_request_serialization_camel_case() {
     assert!(json_val.get("generationOptions").is_some());
 
     // Verify sourceContext items use camelCase
-    let sources = json_val["sourceContext"].as_array().expect("array of sources");
+    let sources = json_val["sourceContext"]
+        .as_array()
+        .expect("array of sources");
     assert_eq!(sources.len(), 2);
     assert!(sources[0].get("sourceId").is_some());
     assert!(sources[0].get("sourceType").is_some());
@@ -193,7 +195,9 @@ fn test_content_plan_serialization_camel_case_and_snake_enums() {
     assert!(scenes[0].get("stockSearchQueries").is_some());
     assert!(scenes[0].get("imagePrompt").is_some());
 
-    let media_intents = scenes[0]["mediaIntent"].as_array().expect("mediaIntent array");
+    let media_intents = scenes[0]["mediaIntent"]
+        .as_array()
+        .expect("mediaIntent array");
     assert_eq!(media_intents[0], "stock_video");
     assert_eq!(media_intents[1], "ai_image");
 
@@ -209,27 +213,72 @@ fn test_content_plan_serialization_camel_case_and_snake_enums() {
 #[test]
 fn test_enum_serialization_variants() {
     // InputType
-    assert_eq!(serde_json::to_string(&InputType::Topic).unwrap(), "\"topic\"");
-    assert_eq!(serde_json::to_string(&InputType::Script).unwrap(), "\"script\"");
+    assert_eq!(
+        serde_json::to_string(&InputType::Topic).unwrap(),
+        "\"topic\""
+    );
+    assert_eq!(
+        serde_json::to_string(&InputType::Script).unwrap(),
+        "\"script\""
+    );
 
     // PlanStatus
-    assert_eq!(serde_json::to_string(&PlanStatus::Draft).unwrap(), "\"draft\"");
-    assert_eq!(serde_json::to_string(&PlanStatus::Approved).unwrap(), "\"approved\"");
-    assert_eq!(serde_json::to_string(&PlanStatus::Archived).unwrap(), "\"archived\"");
+    assert_eq!(
+        serde_json::to_string(&PlanStatus::Draft).unwrap(),
+        "\"draft\""
+    );
+    assert_eq!(
+        serde_json::to_string(&PlanStatus::Approved).unwrap(),
+        "\"approved\""
+    );
+    assert_eq!(
+        serde_json::to_string(&PlanStatus::Archived).unwrap(),
+        "\"archived\""
+    );
 
     // GroundingStatus
-    assert_eq!(serde_json::to_string(&GroundingStatus::Supported).unwrap(), "\"supported\"");
-    assert_eq!(serde_json::to_string(&GroundingStatus::ModelKnowledge).unwrap(), "\"model_knowledge\"");
-    assert_eq!(serde_json::to_string(&GroundingStatus::Uncertain).unwrap(), "\"uncertain\"");
-    assert_eq!(serde_json::to_string(&GroundingStatus::Modified).unwrap(), "\"modified\"");
+    assert_eq!(
+        serde_json::to_string(&GroundingStatus::Supported).unwrap(),
+        "\"supported\""
+    );
+    assert_eq!(
+        serde_json::to_string(&GroundingStatus::ModelKnowledge).unwrap(),
+        "\"model_knowledge\""
+    );
+    assert_eq!(
+        serde_json::to_string(&GroundingStatus::Uncertain).unwrap(),
+        "\"uncertain\""
+    );
+    assert_eq!(
+        serde_json::to_string(&GroundingStatus::Modified).unwrap(),
+        "\"modified\""
+    );
 
     // MediaIntent
-    assert_eq!(serde_json::to_string(&MediaIntent::StockVideo).unwrap(), "\"stock_video\"");
-    assert_eq!(serde_json::to_string(&MediaIntent::StockImage).unwrap(), "\"stock_image\"");
-    assert_eq!(serde_json::to_string(&MediaIntent::AiImage).unwrap(), "\"ai_image\"");
-    assert_eq!(serde_json::to_string(&MediaIntent::AiVideo).unwrap(), "\"ai_video\"");
-    assert_eq!(serde_json::to_string(&MediaIntent::ScreenRecording).unwrap(), "\"screen_recording\"");
-    assert_eq!(serde_json::to_string(&MediaIntent::TextGraphic).unwrap(), "\"text_graphic\"");
+    assert_eq!(
+        serde_json::to_string(&MediaIntent::StockVideo).unwrap(),
+        "\"stock_video\""
+    );
+    assert_eq!(
+        serde_json::to_string(&MediaIntent::StockImage).unwrap(),
+        "\"stock_image\""
+    );
+    assert_eq!(
+        serde_json::to_string(&MediaIntent::AiImage).unwrap(),
+        "\"ai_image\""
+    );
+    assert_eq!(
+        serde_json::to_string(&MediaIntent::AiVideo).unwrap(),
+        "\"ai_video\""
+    );
+    assert_eq!(
+        serde_json::to_string(&MediaIntent::ScreenRecording).unwrap(),
+        "\"screen_recording\""
+    );
+    assert_eq!(
+        serde_json::to_string(&MediaIntent::TextGraphic).unwrap(),
+        "\"text_graphic\""
+    );
 }
 
 #[test]
@@ -370,23 +419,19 @@ fn test_derive_plan_fields_aggregates_and_sorting() {
             stock_search_queries: vec![],
             image_prompt: None,
             video_prompt: None,
-            claims: vec![
-                Claim {
-                    id: "c-3".to_string(),
-                    text: "Mars is the fourth planet.".to_string(),
-                    grounding_status: GroundingStatus::Supported,
-                    source_refs: vec![
-                        SourceRef {
-                            source_id: "src-1".to_string(),
-                            locator: Some("intro".to_string()),
-                            excerpt_hash: None,
-                            note: None,
-                        },
-                    ],
-                    grounding_valid: true,
+            claims: vec![Claim {
+                id: "c-3".to_string(),
+                text: "Mars is the fourth planet.".to_string(),
+                grounding_status: GroundingStatus::Supported,
+                source_refs: vec![SourceRef {
+                    source_id: "src-1".to_string(),
+                    locator: Some("intro".to_string()),
+                    excerpt_hash: None,
                     note: None,
-                },
-            ],
+                }],
+                grounding_valid: true,
+                note: None,
+            }],
             source_refs: vec![],
         },
         ContentScene {
@@ -414,30 +459,28 @@ fn test_derive_plan_fields_aggregates_and_sorting() {
             stock_search_queries: vec![],
             image_prompt: None,
             video_prompt: None,
-            claims: vec![
-                Claim {
-                    id: "c-2".to_string(),
-                    text: "Curiosity found water evidence.".to_string(),
-                    grounding_status: GroundingStatus::Supported,
-                    source_refs: vec![
-                        SourceRef {
-                            source_id: "src-2".to_string(),
-                            locator: None,
-                            excerpt_hash: None,
-                            note: None,
-                        },
-                        // Overlapping with c-3 from scene-3
-                        SourceRef {
-                            source_id: "src-1".to_string(),
-                            locator: Some("intro".to_string()),
-                            excerpt_hash: None,
-                            note: None,
-                        },
-                    ],
-                    grounding_valid: true,
-                    note: None,
-                },
-            ],
+            claims: vec![Claim {
+                id: "c-2".to_string(),
+                text: "Curiosity found water evidence.".to_string(),
+                grounding_status: GroundingStatus::Supported,
+                source_refs: vec![
+                    SourceRef {
+                        source_id: "src-2".to_string(),
+                        locator: None,
+                        excerpt_hash: None,
+                        note: None,
+                    },
+                    // Overlapping with c-3 from scene-3
+                    SourceRef {
+                        source_id: "src-1".to_string(),
+                        locator: Some("intro".to_string()),
+                        excerpt_hash: None,
+                        note: None,
+                    },
+                ],
+                grounding_valid: true,
+                note: None,
+            }],
             source_refs: vec![],
         },
     ];
@@ -552,54 +595,84 @@ fn test_validate_content_plan_success() {
 fn test_validate_content_plan_empty_fields() {
     let mut plan = create_valid_plan();
     plan.id = "  ".to_string();
-    assert_eq!(validate_content_plan(&plan).unwrap_err().code(), "content_plan_validation_failed");
+    assert_eq!(
+        validate_content_plan(&plan).unwrap_err().code(),
+        "content_plan_validation_failed"
+    );
 
     let mut plan = create_valid_plan();
     plan.project_id = "".to_string();
-    assert_eq!(validate_content_plan(&plan).unwrap_err().code(), "content_plan_validation_failed");
+    assert_eq!(
+        validate_content_plan(&plan).unwrap_err().code(),
+        "content_plan_validation_failed"
+    );
 
     let mut plan = create_valid_plan();
     plan.title = " \n ".to_string();
-    assert_eq!(validate_content_plan(&plan).unwrap_err().code(), "content_plan_validation_failed");
+    assert_eq!(
+        validate_content_plan(&plan).unwrap_err().code(),
+        "content_plan_validation_failed"
+    );
 }
 
 #[test]
 fn test_validate_content_plan_non_positive_target_duration() {
     let mut plan = create_valid_plan();
     plan.target_duration_ms = 0;
-    assert_eq!(validate_content_plan(&plan).unwrap_err().code(), "content_plan_validation_failed");
+    assert_eq!(
+        validate_content_plan(&plan).unwrap_err().code(),
+        "content_plan_validation_failed"
+    );
 
     plan.target_duration_ms = -100;
-    assert_eq!(validate_content_plan(&plan).unwrap_err().code(), "content_plan_validation_failed");
+    assert_eq!(
+        validate_content_plan(&plan).unwrap_err().code(),
+        "content_plan_validation_failed"
+    );
 }
 
 #[test]
 fn test_validate_content_plan_empty_scenes() {
     let mut plan = create_valid_plan();
     plan.scenes = vec![];
-    assert_eq!(validate_content_plan(&plan).unwrap_err().code(), "content_plan_validation_failed");
+    assert_eq!(
+        validate_content_plan(&plan).unwrap_err().code(),
+        "content_plan_validation_failed"
+    );
 }
 
 #[test]
 fn test_validate_content_plan_scene_id_invariants() {
     let mut plan = create_valid_plan();
     plan.scenes[0].id = "  ".to_string();
-    assert_eq!(validate_content_plan(&plan).unwrap_err().code(), "content_plan_validation_failed");
+    assert_eq!(
+        validate_content_plan(&plan).unwrap_err().code(),
+        "content_plan_validation_failed"
+    );
 
     let mut plan = create_valid_plan();
     plan.scenes[1].id = plan.scenes[0].id.clone();
-    assert_eq!(validate_content_plan(&plan).unwrap_err().code(), "content_plan_validation_failed");
+    assert_eq!(
+        validate_content_plan(&plan).unwrap_err().code(),
+        "content_plan_validation_failed"
+    );
 }
 
 #[test]
 fn test_validate_content_plan_scene_order_invariants() {
     let mut plan = create_valid_plan();
     plan.scenes[0].order = -1;
-    assert_eq!(validate_content_plan(&plan).unwrap_err().code(), "content_plan_validation_failed");
+    assert_eq!(
+        validate_content_plan(&plan).unwrap_err().code(),
+        "content_plan_validation_failed"
+    );
 
     let mut plan = create_valid_plan();
     plan.scenes[1].order = plan.scenes[0].order;
-    assert_eq!(validate_content_plan(&plan).unwrap_err().code(), "content_plan_validation_failed");
+    assert_eq!(
+        validate_content_plan(&plan).unwrap_err().code(),
+        "content_plan_validation_failed"
+    );
 }
 
 #[test]
@@ -607,21 +680,33 @@ fn test_validate_content_plan_scene_content_invariants() {
     // Non-positive duration
     let mut plan = create_valid_plan();
     plan.scenes[0].duration_estimate_ms = 0;
-    assert_eq!(validate_content_plan(&plan).unwrap_err().code(), "content_plan_validation_failed");
+    assert_eq!(
+        validate_content_plan(&plan).unwrap_err().code(),
+        "content_plan_validation_failed"
+    );
 
     let mut plan = create_valid_plan();
     plan.scenes[0].duration_estimate_ms = -10;
-    assert_eq!(validate_content_plan(&plan).unwrap_err().code(), "content_plan_validation_failed");
+    assert_eq!(
+        validate_content_plan(&plan).unwrap_err().code(),
+        "content_plan_validation_failed"
+    );
 
     // Empty narration
     let mut plan = create_valid_plan();
     plan.scenes[0].narration = "   ".to_string();
-    assert_eq!(validate_content_plan(&plan).unwrap_err().code(), "content_plan_validation_failed");
+    assert_eq!(
+        validate_content_plan(&plan).unwrap_err().code(),
+        "content_plan_validation_failed"
+    );
 
     // Empty visual description
     let mut plan = create_valid_plan();
     plan.scenes[0].visual_description = "".to_string();
-    assert_eq!(validate_content_plan(&plan).unwrap_err().code(), "content_plan_validation_failed");
+    assert_eq!(
+        validate_content_plan(&plan).unwrap_err().code(),
+        "content_plan_validation_failed"
+    );
 }
 
 #[test]
@@ -629,12 +714,18 @@ fn test_validate_content_plan_claim_id_invariants() {
     // Empty claim ID
     let mut plan = create_valid_plan();
     plan.scenes[0].claims[0].id = "   ".to_string();
-    assert_eq!(validate_content_plan(&plan).unwrap_err().code(), "content_plan_validation_failed");
+    assert_eq!(
+        validate_content_plan(&plan).unwrap_err().code(),
+        "content_plan_validation_failed"
+    );
 
     // Duplicate claim ID within same scene or across scenes
     let mut plan = create_valid_plan();
     plan.scenes[1].claims[0].id = plan.scenes[0].claims[0].id.clone();
-    assert_eq!(validate_content_plan(&plan).unwrap_err().code(), "content_plan_validation_failed");
+    assert_eq!(
+        validate_content_plan(&plan).unwrap_err().code(),
+        "content_plan_validation_failed"
+    );
 }
 
 #[test]
@@ -651,11 +742,15 @@ fn test_validate_duration_tolerance() {
 
     // Outside cases
     assert_eq!(
-        validate_duration_tolerance(target, 50_999, tol).unwrap_err().code(),
+        validate_duration_tolerance(target, 50_999, tol)
+            .unwrap_err()
+            .code(),
         "content_plan_validation_failed"
     );
     assert_eq!(
-        validate_duration_tolerance(target, 69_001, tol).unwrap_err().code(),
+        validate_duration_tolerance(target, 69_001, tol)
+            .unwrap_err()
+            .code(),
         "content_plan_validation_failed"
     );
 
@@ -663,17 +758,23 @@ fn test_validate_duration_tolerance() {
     assert!(validate_duration_tolerance(target, 55_000, 0.0).is_ok());
     assert!(validate_duration_tolerance(target, 55_000, f64::NAN).is_ok());
     assert_eq!(
-        validate_duration_tolerance(target, 80_000, -0.5).unwrap_err().code(),
+        validate_duration_tolerance(target, 80_000, -0.5)
+            .unwrap_err()
+            .code(),
         "content_plan_validation_failed"
     );
     assert_eq!(
-        validate_duration_tolerance(target, 80_000, f64::NAN).unwrap_err().code(),
+        validate_duration_tolerance(target, 80_000, f64::NAN)
+            .unwrap_err()
+            .code(),
         "content_plan_validation_failed"
     );
 
     // Target duration non-positive
     assert_eq!(
-        validate_duration_tolerance(0, 10_000, tol).unwrap_err().code(),
+        validate_duration_tolerance(0, 10_000, tol)
+            .unwrap_err()
+            .code(),
         "content_plan_validation_failed"
     );
 }
@@ -685,23 +786,81 @@ fn test_validate_duration_tolerance() {
 #[test]
 fn test_error_codes_all_variants() {
     let errors: Vec<(ContentPlanningError, &'static str)> = vec![
-        (ContentPlanningError::ContentPlanNotFound("id1".into()), "content_plan_not_found"),
-        (ContentPlanningError::ContentPlanRevisionNotFound { plan_id: "id1".into(), revision: 2 }, "content_plan_revision_not_found"),
-        (ContentPlanningError::ContentPlanRevisionConflict { plan_id: "id1".into(), expected: 1, actual: 2 }, "content_plan_revision_conflict"),
-        (ContentPlanningError::ContentPlanArchived("id1".into()), "content_plan_archived"),
-        (ContentPlanningError::InvalidPlanningRequest("bad request".into()), "invalid_planning_request"),
-        (ContentPlanningError::PlanningContextTooLarge("too large".into()), "planning_context_too_large"),
-        (ContentPlanningError::ContentPlanValidationFailed("validation err".into()), "content_plan_validation_failed"),
-        (ContentPlanningError::SourceGroundingInvalid("grounding err".into()), "source_grounding_invalid"),
-        (ContentPlanningError::ProviderAuthMissing("auth missing".into()), "provider_auth_missing"),
-        (ContentPlanningError::ProviderAuthFailed("auth failed".into()), "provider_auth_failed"),
-        (ContentPlanningError::ProviderRateLimited("rate limited".into()), "provider_rate_limited"),
-        (ContentPlanningError::ProviderTimeout("timeout".into()), "provider_timeout"),
-        (ContentPlanningError::ProviderUnavailable("unavailable".into()), "provider_unavailable"),
-        (ContentPlanningError::StructuredOutputInvalid("output invalid".into()), "structured_output_invalid"),
-        (ContentPlanningError::PlanningCancelled("cancelled".into()), "planning_cancelled"),
-        (ContentPlanningError::StaleLease("stale lease".into()), "stale_lease"),
-        (ContentPlanningError::ContentPlanPersistFailed("persist err".into()), "content_plan_persist_failed"),
+        (
+            ContentPlanningError::ContentPlanNotFound("id1".into()),
+            "content_plan_not_found",
+        ),
+        (
+            ContentPlanningError::ContentPlanRevisionNotFound {
+                plan_id: "id1".into(),
+                revision: 2,
+            },
+            "content_plan_revision_not_found",
+        ),
+        (
+            ContentPlanningError::ContentPlanRevisionConflict {
+                plan_id: "id1".into(),
+                expected: 1,
+                actual: 2,
+            },
+            "content_plan_revision_conflict",
+        ),
+        (
+            ContentPlanningError::ContentPlanArchived("id1".into()),
+            "content_plan_archived",
+        ),
+        (
+            ContentPlanningError::InvalidPlanningRequest("bad request".into()),
+            "invalid_planning_request",
+        ),
+        (
+            ContentPlanningError::PlanningContextTooLarge("too large".into()),
+            "planning_context_too_large",
+        ),
+        (
+            ContentPlanningError::ContentPlanValidationFailed("validation err".into()),
+            "content_plan_validation_failed",
+        ),
+        (
+            ContentPlanningError::SourceGroundingInvalid("grounding err".into()),
+            "source_grounding_invalid",
+        ),
+        (
+            ContentPlanningError::ProviderAuthMissing("auth missing".into()),
+            "provider_auth_missing",
+        ),
+        (
+            ContentPlanningError::ProviderAuthFailed("auth failed".into()),
+            "provider_auth_failed",
+        ),
+        (
+            ContentPlanningError::ProviderRateLimited("rate limited".into()),
+            "provider_rate_limited",
+        ),
+        (
+            ContentPlanningError::ProviderTimeout("timeout".into()),
+            "provider_timeout",
+        ),
+        (
+            ContentPlanningError::ProviderUnavailable("unavailable".into()),
+            "provider_unavailable",
+        ),
+        (
+            ContentPlanningError::StructuredOutputInvalid("output invalid".into()),
+            "structured_output_invalid",
+        ),
+        (
+            ContentPlanningError::PlanningCancelled("cancelled".into()),
+            "planning_cancelled",
+        ),
+        (
+            ContentPlanningError::StaleLease("stale lease".into()),
+            "stale_lease",
+        ),
+        (
+            ContentPlanningError::ContentPlanPersistFailed("persist err".into()),
+            "content_plan_persist_failed",
+        ),
     ];
 
     for (err, expected_code) in errors {

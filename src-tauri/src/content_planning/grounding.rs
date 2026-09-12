@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::content_planning::error::ContentPlanningError;
-use crate::content_planning::model::{Claim, ContentPlan, ContentScene, GroundingStatus, PlanningSource};
+use crate::content_planning::model::{
+    Claim, ContentPlan, ContentScene, GroundingStatus, PlanningSource,
+};
 
 /// Validates grounding integrity for a content plan against the supplied sources.
 ///
@@ -134,8 +136,11 @@ pub fn invalidate_manual_grounding(base: &ContentPlan, edited: &mut ContentPlan)
                 }
             } else {
                 // Narration unchanged -> inspect individual claims
-                let base_claims: HashMap<&str, &Claim> =
-                    base_scene.claims.iter().map(|c| (c.id.as_str(), c)).collect();
+                let base_claims: HashMap<&str, &Claim> = base_scene
+                    .claims
+                    .iter()
+                    .map(|c| (c.id.as_str(), c))
+                    .collect();
 
                 for edited_claim in &mut edited_scene.claims {
                     if let Some(base_claim) = base_claims.get(edited_claim.id.as_str()) {
@@ -143,8 +148,11 @@ pub fn invalidate_manual_grounding(base: &ContentPlan, edited: &mut ContentPlan)
                             // Direct claim text edit
                             edited_claim.grounding_status = GroundingStatus::Modified;
                             edited_claim.grounding_valid = false;
+                        } else {
+                            // Enforce that unchanged text preserves the base plan's status and validity
+                            edited_claim.grounding_status = base_claim.grounding_status;
+                            edited_claim.grounding_valid = base_claim.grounding_valid;
                         }
-                        // If unchanged, keep status and validity
                     } else {
                         // New claim in existing scene
                         edited_claim.grounding_status = GroundingStatus::Modified;

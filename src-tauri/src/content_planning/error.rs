@@ -8,7 +8,9 @@ pub enum ContentPlanningError {
     #[error("Content plan revision not found: plan {plan_id}, revision {revision}")]
     ContentPlanRevisionNotFound { plan_id: String, revision: i64 },
 
-    #[error("Content plan revision conflict for plan {plan_id}: expected {expected}, actual {actual}")]
+    #[error(
+        "Content plan revision conflict for plan {plan_id}: expected {expected}, actual {actual}"
+    )]
     ContentPlanRevisionConflict {
         plan_id: String,
         expected: i64,
