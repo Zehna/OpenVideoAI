@@ -123,6 +123,8 @@ impl ContentPlanService {
 
         // 9. Set monotonic revision and status
         edited.id = plan_id.to_string();
+        edited.project_id = current.project_id.clone();
+        edited.created_at = current.created_at.clone();
         edited.revision = expected_revision + 1;
         edited.status = PlanStatus::Draft;
         edited.updated_at = Utc::now().to_rfc3339();
@@ -361,6 +363,9 @@ impl ContentPlanService {
                     });
                 }
 
+                candidate.id = plan_id.to_string();
+                candidate.project_id = current.project_id.clone();
+                candidate.created_at = current.created_at.clone();
                 candidate.revision = base_rev + 1;
                 candidate.status = PlanStatus::Draft;
                 candidate.updated_at = Utc::now().to_rfc3339();
