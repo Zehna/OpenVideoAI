@@ -166,7 +166,7 @@ pub fn validate_duration_tolerance(
             "target duration must be positive".to_string(),
         ));
     }
-    let eff_tol = if tolerance <= 0.0 {
+    let eff_tol = if tolerance <= 0.0 || tolerance.is_nan() {
         DEFAULT_DURATION_TOLERANCE
     } else {
         tolerance

@@ -659,10 +659,15 @@ fn test_validate_duration_tolerance() {
         "content_plan_validation_failed"
     );
 
-    // Fallback when tolerance <= 0.0 uses DEFAULT_DURATION_TOLERANCE (0.15)
+    // Fallback when tolerance <= 0.0 or NaN uses DEFAULT_DURATION_TOLERANCE (0.15)
     assert!(validate_duration_tolerance(target, 55_000, 0.0).is_ok());
+    assert!(validate_duration_tolerance(target, 55_000, f64::NAN).is_ok());
     assert_eq!(
         validate_duration_tolerance(target, 80_000, -0.5).unwrap_err().code(),
+        "content_plan_validation_failed"
+    );
+    assert_eq!(
+        validate_duration_tolerance(target, 80_000, f64::NAN).unwrap_err().code(),
         "content_plan_validation_failed"
     );
 
