@@ -1,7 +1,9 @@
 pub mod config;
+pub mod gemini;
 pub mod mock;
 
 pub use config::*;
+pub use gemini::*;
 pub use mock::*;
 
 use crate::content_planning::error::ContentPlanningError;

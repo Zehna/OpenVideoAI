@@ -9,7 +9,9 @@ use openvideoai_lib::content_planning::prompt::{
     PROMPT_TEMPLATE_VERSION,
 };
 use openvideoai_lib::content_planning::provider::{
-    AIProvider, MockOutcome, MockProvider, ProviderConfigResolver, ProviderError, ProviderRequest,
+    classify_http_status_and_body, sanitize_error_message, AIProvider, GeminiProvider,
+    GeminiRuntimeConfig, MockOutcome, MockProvider, ProviderConfigResolver, ProviderError,
+    ProviderRequest,
 };
 
 static ENV_MUTEX: Mutex<()> = Mutex::new(());
@@ -630,4 +632,164 @@ fn test_planner_regenerate_narration_isolation() {
     assert!(new_plan
         .full_narration
         .contains("Protected Scene 2 Narration"));
+}
+
+#[test]
+fn test_gemini_classify_http_success() {
+    let body = r#"{
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "text": "{\"id\": \"plan-123\", \"title\": \"Test Plan\"}"
+                        }
+                    ],
+                    "role": "model"
+                },
+                "finishReason": "STOP",
+                "index": 0
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 50,
+            "candidatesTokenCount": 100,
+            "totalTokenCount": 150
+        }
+    }"#;
+
+    let res = classify_http_status_and_body(200, body);
+    assert!(res.is_ok());
+    let text = res.unwrap();
+    assert_eq!(text, "{\"id\": \"plan-123\", \"title\": \"Test Plan\"}");
+}
+
+#[test]
+fn test_gemini_classify_http_auth_failed() {
+    let body_401 =
+        r#"{"error": {"code": 401, "message": "API key not valid", "status": "UNAUTHENTICATED"}}"#;
+    let err_401 = classify_http_status_and_body(401, body_401).unwrap_err();
+    assert!(matches!(err_401, ProviderError::AuthFailed(_)));
+    assert!(err_401.to_string().contains("API key not valid"));
+
+    let body_403 = r#"{"error": {"code": 403, "message": "Permission denied", "status": "PERMISSION_DENIED"}}"#;
+    let err_403 = classify_http_status_and_body(403, body_403).unwrap_err();
+    assert!(matches!(err_403, ProviderError::AuthFailed(_)));
+    assert!(err_403.to_string().contains("Permission denied"));
+}
+
+#[test]
+fn test_gemini_classify_http_rate_limited() {
+    let body = r#"{"error": {"code": 429, "message": "Resource has been exhausted", "status": "RESOURCE_EXHAUSTED"}}"#;
+    let err = classify_http_status_and_body(429, body).unwrap_err();
+    assert!(matches!(err, ProviderError::RateLimited(_)));
+    assert!(err.to_string().contains("Resource has been exhausted"));
+}
+
+#[test]
+fn test_gemini_classify_http_timeout() {
+    let body =
+        r#"{"error": {"code": 408, "message": "Request timeout", "status": "DEADLINE_EXCEEDED"}}"#;
+    let err = classify_http_status_and_body(408, body).unwrap_err();
+    assert!(matches!(err, ProviderError::Timeout(_)));
+    assert!(err.to_string().contains("Request timeout"));
+}
+
+#[test]
+fn test_gemini_classify_http_unavailable() {
+    let body_500 =
+        r#"{"error": {"code": 500, "message": "Internal server error", "status": "INTERNAL"}}"#;
+    let err_500 = classify_http_status_and_body(500, body_500).unwrap_err();
+    assert!(matches!(err_500, ProviderError::Unavailable(_)));
+    assert!(err_500.to_string().contains("Internal server error"));
+
+    let body_503 =
+        r#"{"error": {"code": 503, "message": "Service unavailable", "status": "UNAVAILABLE"}}"#;
+    let err_503 = classify_http_status_and_body(503, body_503).unwrap_err();
+    assert!(matches!(err_503, ProviderError::Unavailable(_)));
+    assert!(err_503.to_string().contains("Service unavailable"));
+}
+
+#[test]
+fn test_gemini_classify_http_structured_invalid() {
+    // 1. Status 400 bad request
+    let body_400 = r#"{"error": {"code": 400, "message": "Invalid JSON payload", "status": "INVALID_ARGUMENT"}}"#;
+    let err_400 = classify_http_status_and_body(400, body_400).unwrap_err();
+    assert!(matches!(err_400, ProviderError::StructuredOutputInvalid(_)));
+    assert!(err_400.to_string().contains("Invalid JSON payload"));
+
+    // 2. Status 200 but malformed JSON body
+    let err_malformed = classify_http_status_and_body(200, "not a json string").unwrap_err();
+    assert!(matches!(
+        err_malformed,
+        ProviderError::StructuredOutputInvalid(_)
+    ));
+
+    // 3. Status 200 with empty candidates
+    let body_empty_cand = r#"{"candidates": []}"#;
+    let err_empty = classify_http_status_and_body(200, body_empty_cand).unwrap_err();
+    assert!(matches!(
+        err_empty,
+        ProviderError::StructuredOutputInvalid(_)
+    ));
+    assert!(err_empty.to_string().contains("empty candidate response"));
+
+    // 4. Status 200 with blank text in candidate
+    let body_blank_text = r#"{"candidates": [{"content": {"parts": [{"text": "   "}]}}]}"#;
+    let err_blank = classify_http_status_and_body(200, body_blank_text).unwrap_err();
+    assert!(matches!(
+        err_blank,
+        ProviderError::StructuredOutputInvalid(_)
+    ));
+    assert!(err_blank.to_string().contains("empty candidate response"));
+}
+
+#[test]
+fn test_gemini_error_sanitization() {
+    let raw_secret_key = "AIzaSyD12345678901234567890123456789012";
+    let raw_body = format!(
+        r#"{{"error": {{"code": 401, "message": "Invalid API key: {}", "status": "UNAUTHENTICATED"}}}}"#,
+        raw_secret_key
+    );
+
+    let err = classify_http_status_and_body(401, &raw_body).unwrap_err();
+    let err_msg = err.to_string();
+    assert!(
+        !err_msg.contains(raw_secret_key),
+        "Error message must not contain raw API key"
+    );
+    assert!(
+        err_msg.contains("[REDACTED]"),
+        "Error message should indicate redacted key"
+    );
+
+    // Test direct sanitize_error_message
+    let sample = format!(
+        "Request failed with key={} and secret=abcdef123456",
+        raw_secret_key
+    );
+    let sanitized = sanitize_error_message(&sample);
+    assert!(!sanitized.contains(raw_secret_key));
+    assert!(!sanitized.contains("abcdef123456"));
+}
+
+#[test]
+fn test_gemini_provider_construction() {
+    let empty_config = GeminiRuntimeConfig {
+        api_key: "".to_string(),
+        model: "gemini-2.5-flash".to_string(),
+    };
+    let err = GeminiProvider::new(empty_config).unwrap_err();
+    assert!(matches!(err, ProviderError::AuthMissing(_)));
+
+    let valid_config = GeminiRuntimeConfig {
+        api_key: "valid-test-key".to_string(),
+        model: "gemini-2.5-flash".to_string(),
+    };
+    let provider = GeminiProvider::with_base_url(
+        valid_config,
+        "https://custom.endpoint.example.com".to_string(),
+    )
+    .expect("should instantiate GeminiProvider");
+    assert_eq!(provider.name(), "gemini");
 }
