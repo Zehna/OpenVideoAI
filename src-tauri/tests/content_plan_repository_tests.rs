@@ -58,6 +58,7 @@ fn sample_plan(id: &str, project_id: &str, revision: i64) -> ContentPlan {
             prompt_template_version: 1,
             generated_at: "2026-09-12T10:00:00Z".to_string(),
             usage: GenerationUsage::default(),
+            repaired_calls: None,
         }),
         created_at: "2026-09-12T10:00:00Z".to_string(),
         updated_at: "2026-09-12T10:00:00Z".to_string(),

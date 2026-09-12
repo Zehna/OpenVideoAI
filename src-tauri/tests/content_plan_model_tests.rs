@@ -132,6 +132,7 @@ fn create_valid_plan() -> ContentPlan {
                 provider_reported_cost: Some(0.0025),
                 duration_ms: Some(1500),
             },
+            repaired_calls: None,
         }),
         created_at: "2026-09-12T10:00:00Z".to_string(),
         updated_at: "2026-09-12T10:00:00Z".to_string(),

@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::content_planning::model::GenerationUsage;
 use crate::content_planning::provider::{
@@ -114,6 +114,7 @@ pub enum MockOutcome {
 pub struct MockProvider {
     outcome: MockOutcome,
     call_count: AtomicUsize,
+    repair_failed: AtomicBool,
 }
 
 impl std::fmt::Debug for MockProvider {
@@ -130,6 +131,7 @@ impl Clone for MockProvider {
         Self {
             outcome: self.outcome,
             call_count: AtomicUsize::new(self.call_count.load(Ordering::SeqCst)),
+            repair_failed: AtomicBool::new(self.repair_failed.load(Ordering::SeqCst)),
         }
     }
 }
@@ -139,6 +141,7 @@ impl MockProvider {
         Self {
             outcome,
             call_count: AtomicUsize::new(0),
+            repair_failed: AtomicBool::new(false),
         }
     }
 
@@ -159,12 +162,12 @@ impl MockProvider {
         valid_text: &'static str,
         malformed_text: &'static str,
     ) -> Result<ProviderResponse, ProviderError> {
-        let count = self.call_count.fetch_add(1, Ordering::SeqCst);
+        let _count = self.call_count.fetch_add(1, Ordering::SeqCst);
         match self.outcome {
             MockOutcome::Success => Ok(self.build_response(valid_text)),
             MockOutcome::Malformed => Ok(self.build_response(malformed_text)),
             MockOutcome::Repairable => {
-                if count == 0 {
+                if !self.repair_failed.swap(true, Ordering::SeqCst) {
                     Ok(self.build_response(malformed_text))
                 } else {
                     Ok(self.build_response(valid_text))
@@ -211,7 +214,13 @@ impl AIProvider for MockProvider {
         &self,
         _input: &ProviderRequest,
     ) -> Result<ProviderResponse, ProviderError> {
-        self.next_response(MOCK_DRAFT_TEXT, MOCK_MALFORMED_DRAFT)
+        match self.outcome {
+            MockOutcome::Repairable | MockOutcome::RepairExhausted => {
+                self.call_count.fetch_add(1, Ordering::SeqCst);
+                Ok(self.build_response(MOCK_DRAFT_TEXT))
+            }
+            _ => self.next_response(MOCK_DRAFT_TEXT, MOCK_MALFORMED_DRAFT),
+        }
     }
 
     fn generate_content_plan(

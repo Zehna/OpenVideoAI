@@ -1,7 +1,9 @@
 use std::sync::Mutex;
 
+use openvideoai_lib::content_planning::derivation::derive_plan_fields;
 use openvideoai_lib::content_planning::error::ContentPlanningError;
 use openvideoai_lib::content_planning::model::*;
+use openvideoai_lib::content_planning::planner::{ContentPlanner, MAX_MODEL_CALLS_PER_STAGE};
 use openvideoai_lib::content_planning::prompt::{
     build_draft_prompt, build_plan_prompt, PromptBuilder, PLANNER_PROFILE_VERSION,
     PROMPT_TEMPLATE_VERSION,
@@ -354,4 +356,278 @@ fn test_provider_error_conversion_to_content_planning_error() {
         assert_eq!(converted, expected_cpe);
         assert_eq!(converted.code(), expected_code);
     }
+}
+
+fn fixture_planning_request() -> PlanningRequest {
+    PlanningRequest {
+        project_id: "project-mock".to_string(),
+        input_type: InputType::Topic,
+        input_text: "Mock topic for planner testing".to_string(),
+        target_duration_ms: 30000,
+        language: "en".to_string(),
+        tone: "informative".to_string(),
+        source_context: vec![PlanningSource {
+            source_id: "src-1".to_string(),
+            source_type: "document".to_string(),
+            title: "Source Document".to_string(),
+            author: Some("Author".to_string()),
+            url: None,
+            published_at: None,
+            locator: None,
+            content_snapshot: "Snapshot text".to_string(),
+            content_hash: "hash1".to_string(),
+        }],
+        generation_options: GenerationOptions::default(),
+    }
+}
+
+#[test]
+fn test_planner_generate_plan_success() {
+    let provider = MockProvider::new(MockOutcome::Success);
+    let planner = ContentPlanner::new(provider);
+    let request = fixture_planning_request();
+
+    let plan = planner
+        .generate_plan(&request)
+        .expect("generate_plan should succeed");
+
+    assert_eq!(plan.id, "plan-mock");
+    assert_eq!(plan.project_id, "project-mock");
+    assert_eq!(plan.scenes.len(), 2);
+    assert_eq!(plan.estimated_duration_ms, 30000);
+    assert_eq!(plan.target_duration_ms, 30000);
+    assert!(!plan.full_narration.is_empty());
+    assert_eq!(planner.provider().call_count(), 2); // 1 draft + 1 plan expansion
+    assert!(plan.generation_metadata.is_some());
+}
+
+#[test]
+fn test_planner_generate_plan_repairable() {
+    let provider = MockProvider::new(MockOutcome::Repairable);
+    let planner = ContentPlanner::new(provider);
+    let request = fixture_planning_request();
+
+    let plan = planner
+        .generate_plan(&request)
+        .expect("generate_plan with repair should succeed");
+
+    assert_eq!(plan.id, "plan-mock");
+    assert_eq!(plan.scenes.len(), 2);
+    assert_eq!(planner.provider().call_count(), 3); // 1 draft + 1 failed expansion + 1 repair expansion
+    let meta = plan
+        .generation_metadata
+        .as_ref()
+        .expect("generation metadata should be present");
+    assert_eq!(meta.repaired_calls, Some(1));
+}
+
+#[test]
+fn test_planner_repair_exhaustion() {
+    let provider = MockProvider::new(MockOutcome::RepairExhausted);
+    let planner = ContentPlanner::new(provider);
+    let request = fixture_planning_request();
+
+    let err = planner.generate_plan(&request).unwrap_err();
+    assert!(matches!(
+        err,
+        ContentPlanningError::StructuredOutputInvalid(_)
+    ));
+    // Draft was 1 call, then expansion made 3 attempts (initial + 2 repairs = MAX_MODEL_CALLS_PER_STAGE)
+    assert_eq!(
+        planner.provider().call_count(),
+        1 + MAX_MODEL_CALLS_PER_STAGE
+    );
+}
+
+#[test]
+fn test_planner_auth_missing_non_retryable() {
+    let provider = MockProvider::new(MockOutcome::AuthFailed);
+    let planner = ContentPlanner::new(provider);
+    let request = fixture_planning_request();
+
+    let err = planner.generate_plan(&request).unwrap_err();
+    assert!(matches!(err, ContentPlanningError::ProviderAuthFailed(_)));
+    // Fails immediately on 1st call without burning repair budget
+    assert_eq!(planner.provider().call_count(), 1);
+}
+
+#[test]
+fn test_planner_rate_limited_retryable() {
+    let provider = MockProvider::new(MockOutcome::RateLimited);
+    let planner = ContentPlanner::new(provider);
+    let request = fixture_planning_request();
+
+    let err = planner.generate_plan(&request).unwrap_err();
+    assert!(matches!(err, ContentPlanningError::ProviderRateLimited(_)));
+    // Fails immediately on 1st call without burning repair budget
+    assert_eq!(planner.provider().call_count(), 1);
+}
+
+#[test]
+fn test_planner_regenerate_plan() {
+    let provider = MockProvider::new(MockOutcome::Success);
+    let planner = ContentPlanner::new(provider);
+    let request = fixture_planning_request();
+
+    let base_plan = planner
+        .generate_plan(&request)
+        .expect("base plan generation should succeed");
+    assert_eq!(base_plan.revision, 1);
+
+    let sources = request.source_context.clone();
+    let regen_plan = planner
+        .regenerate_plan(&base_plan, "Make the tone more dramatic", &sources)
+        .expect("regenerate_plan should succeed");
+
+    assert_eq!(regen_plan.id, base_plan.id);
+    assert_eq!(regen_plan.revision, 2);
+    assert_eq!(regen_plan.status, PlanStatus::Draft);
+    assert_eq!(regen_plan.scenes.len(), 2);
+    assert_eq!(planner.provider().call_count(), 3); // 2 from generate_plan + 1 from regenerate_plan
+}
+
+#[test]
+fn test_planner_regenerate_scene_isolation() {
+    let provider = MockProvider::new(MockOutcome::Success);
+    let planner = ContentPlanner::new(provider);
+    let request = fixture_planning_request();
+
+    let mut base_plan = planner
+        .generate_plan(&request)
+        .expect("base plan generation should succeed");
+    // Modify scene-2 in base plan so it is distinguishable from mock default
+    base_plan.scenes[1].title = "Custom Protected Scene 2 Title".to_string();
+    base_plan.scenes[1].visual_description = "Custom protected visual description".to_string();
+    base_plan.scenes[1].narration = "Custom protected narration for scene 2.".to_string();
+    derive_plan_fields(&mut base_plan);
+
+    let sources = request.source_context.clone();
+
+    // 1. Error if target scene not found
+    let err = planner
+        .regenerate_scene(
+            &base_plan,
+            "non-existent-scene-id",
+            "Rewrite scene",
+            &sources,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        ContentPlanningError::ContentPlanValidationFailed(_)
+    ));
+
+    // 2. Regenerate scene-1
+    let new_plan = planner
+        .regenerate_scene(
+            &base_plan,
+            "scene-1",
+            "Rewrite scene 1 with new visuals",
+            &sources,
+        )
+        .expect("regenerate_scene should succeed");
+
+    assert_eq!(new_plan.revision, 2);
+    assert_eq!(new_plan.status, PlanStatus::Draft);
+    // Target scene-1 is updated
+    assert_eq!(new_plan.scenes[0].id, "scene-1");
+    // Non-target scene-2 is COMPLETELY PRESERVED
+    assert_eq!(new_plan.scenes[1].id, "scene-2");
+    assert_eq!(new_plan.scenes[1].title, "Custom Protected Scene 2 Title");
+    assert_eq!(
+        new_plan.scenes[1].visual_description,
+        "Custom protected visual description"
+    );
+    assert_eq!(
+        new_plan.scenes[1].narration,
+        "Custom protected narration for scene 2."
+    );
+    assert_eq!(new_plan.scenes[1].order, 2);
+    // Aggregate fields canonically derived
+    assert_eq!(
+        new_plan.estimated_duration_ms,
+        new_plan.scenes[0].duration_estimate_ms + new_plan.scenes[1].duration_estimate_ms
+    );
+}
+
+#[test]
+fn test_planner_regenerate_narration_isolation() {
+    let provider = MockProvider::new(MockOutcome::Success);
+    let planner = ContentPlanner::new(provider);
+    let request = fixture_planning_request();
+
+    let mut base_plan = planner
+        .generate_plan(&request)
+        .expect("base plan generation should succeed");
+    // Set custom visual planning and media intent on scene-1
+    base_plan.scenes[0].title = "Protected Scene 1 Title".to_string();
+    base_plan.scenes[0].visual_description = "Protected Scene 1 Visuals".to_string();
+    base_plan.scenes[0].media_intent = vec![MediaIntent::AiVideo];
+    base_plan.scenes[0].stock_search_queries = vec!["custom query".to_string()];
+    base_plan.scenes[0].image_prompt = Some("custom image prompt".to_string());
+    base_plan.scenes[0].video_prompt = Some("custom video prompt".to_string());
+    base_plan.scenes[0].duration_estimate_ms = 15000;
+    base_plan.scenes[0].narration = "Old narration to be replaced".to_string();
+
+    // Also customize scene-2
+    base_plan.scenes[1].title = "Protected Scene 2 Title".to_string();
+    base_plan.scenes[1].narration = "Protected Scene 2 Narration".to_string();
+    derive_plan_fields(&mut base_plan);
+
+    let sources = request.source_context.clone();
+
+    // Regenerate narration for scene-1
+    let new_plan = planner
+        .regenerate_narration(
+            &base_plan,
+            "scene-1",
+            "Make narration more punchy",
+            &sources,
+        )
+        .expect("regenerate_narration should succeed");
+
+    assert_eq!(new_plan.revision, 2);
+    assert_eq!(new_plan.status, PlanStatus::Draft);
+
+    // Target scene-1: narration & claims updated from mock
+    assert_ne!(new_plan.scenes[0].narration, "Old narration to be replaced");
+    assert_eq!(
+        new_plan.scenes[0].narration,
+        "Welcome to this overview of the topic."
+    );
+
+    // Target scene-1: non-narration fields are completely preserved
+    assert_eq!(new_plan.scenes[0].title, "Protected Scene 1 Title");
+    assert_eq!(
+        new_plan.scenes[0].visual_description,
+        "Protected Scene 1 Visuals"
+    );
+    assert_eq!(new_plan.scenes[0].media_intent, vec![MediaIntent::AiVideo]);
+    assert_eq!(
+        new_plan.scenes[0].stock_search_queries,
+        vec!["custom query".to_string()]
+    );
+    assert_eq!(
+        new_plan.scenes[0].image_prompt,
+        Some("custom image prompt".to_string())
+    );
+    assert_eq!(
+        new_plan.scenes[0].video_prompt,
+        Some("custom video prompt".to_string())
+    );
+    assert_eq!(new_plan.scenes[0].duration_estimate_ms, 15000);
+    assert_eq!(new_plan.scenes[0].order, 1);
+
+    // Non-target scene-2 is completely untouched
+    assert_eq!(new_plan.scenes[1].title, "Protected Scene 2 Title");
+    assert_eq!(new_plan.scenes[1].narration, "Protected Scene 2 Narration");
+    assert_eq!(new_plan.scenes[1].order, 2);
+
+    // Plan aggregates canonically recomputed
+    assert!(new_plan
+        .full_narration
+        .contains("Welcome to this overview of the topic."));
+    assert!(new_plan
+        .full_narration
+        .contains("Protected Scene 2 Narration"));
 }

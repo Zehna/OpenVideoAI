@@ -122,6 +122,8 @@ pub struct GenerationMetadata {
     pub prompt_template_version: i32,
     pub generated_at: String,
     pub usage: GenerationUsage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repaired_calls: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
