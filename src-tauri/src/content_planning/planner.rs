@@ -444,30 +444,38 @@ impl<P: AIProvider> ContentPlanner<P> {
                 continue;
             }
 
+            if let Err(e) = validate_duration_tolerance(
+                base.target_duration_ms,
+                plan.estimated_duration_ms,
+                DEFAULT_DURATION_TOLERANCE,
+            ) {
+                if attempt + 1 >= MAX_MODEL_CALLS_PER_STAGE {
+                    return Err(e);
+                }
+                repair_count += 1;
+                prompt = PromptBuilder::build_repair_prompt(
+                    &resp.text,
+                    &sanitize_error_message(&e.to_string()),
+                );
+                continue;
+            }
+
             plan.revision = base.revision + 1;
             plan.status = PlanStatus::Draft;
 
-            if let Some(ref mut meta) = plan.generation_metadata {
-                meta.repaired_calls = if repair_count > 0 {
+            plan.generation_metadata = Some(GenerationMetadata {
+                provider: resp.provider.clone(),
+                model: resp.model.clone(),
+                planner_profile_version: PromptBuilder::PLANNER_PROFILE_VERSION,
+                prompt_template_version: PromptBuilder::PROMPT_TEMPLATE_VERSION,
+                generated_at: chrono::Utc::now().to_rfc3339(),
+                usage: resp.usage.unwrap_or_default(),
+                repaired_calls: if repair_count > 0 {
                     Some(repair_count as u32)
                 } else {
                     None
-                };
-            } else {
-                plan.generation_metadata = Some(GenerationMetadata {
-                    provider: resp.provider.clone(),
-                    model: resp.model.clone(),
-                    planner_profile_version: PromptBuilder::PLANNER_PROFILE_VERSION,
-                    prompt_template_version: PromptBuilder::PROMPT_TEMPLATE_VERSION,
-                    generated_at: chrono::Utc::now().to_rfc3339(),
-                    usage: resp.usage.unwrap_or_default(),
-                    repaired_calls: if repair_count > 0 {
-                        Some(repair_count as u32)
-                    } else {
-                        None
-                    },
-                });
-            }
+                },
+            });
 
             return Ok(plan);
         }
@@ -613,27 +621,19 @@ impl<P: AIProvider> ContentPlanner<P> {
             plan.revision = base.revision + 1;
             plan.status = PlanStatus::Draft;
 
-            if let Some(ref mut meta) = plan.generation_metadata {
-                meta.repaired_calls = if repair_count > 0 {
+            plan.generation_metadata = Some(GenerationMetadata {
+                provider: resp.provider.clone(),
+                model: resp.model.clone(),
+                planner_profile_version: PromptBuilder::PLANNER_PROFILE_VERSION,
+                prompt_template_version: PromptBuilder::PROMPT_TEMPLATE_VERSION,
+                generated_at: chrono::Utc::now().to_rfc3339(),
+                usage: resp.usage.unwrap_or_default(),
+                repaired_calls: if repair_count > 0 {
                     Some(repair_count as u32)
                 } else {
                     None
-                };
-            } else {
-                plan.generation_metadata = Some(GenerationMetadata {
-                    provider: resp.provider.clone(),
-                    model: resp.model.clone(),
-                    planner_profile_version: PromptBuilder::PLANNER_PROFILE_VERSION,
-                    prompt_template_version: PromptBuilder::PROMPT_TEMPLATE_VERSION,
-                    generated_at: chrono::Utc::now().to_rfc3339(),
-                    usage: resp.usage.unwrap_or_default(),
-                    repaired_calls: if repair_count > 0 {
-                        Some(repair_count as u32)
-                    } else {
-                        None
-                    },
-                });
-            }
+                },
+            });
 
             return Ok(plan);
         }
