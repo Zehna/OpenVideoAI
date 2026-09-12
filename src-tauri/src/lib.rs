@@ -1,4 +1,5 @@
 pub mod artifacts;
+pub mod content_planning;
 pub mod db;
 pub mod events;
 pub mod health;
