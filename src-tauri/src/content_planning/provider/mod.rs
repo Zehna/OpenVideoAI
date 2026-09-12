@@ -81,3 +81,63 @@ pub trait AIProvider: Send + Sync {
         input: &ProviderRequest,
     ) -> Result<ProviderResponse, ProviderError>;
 }
+
+impl<T: ?Sized + AIProvider> AIProvider for std::sync::Arc<T> {
+    fn name(&self) -> &'static str {
+        (**self).name()
+    }
+    fn generate_planning_draft(
+        &self,
+        input: &ProviderRequest,
+    ) -> Result<ProviderResponse, ProviderError> {
+        (**self).generate_planning_draft(input)
+    }
+    fn generate_content_plan(
+        &self,
+        input: &ProviderRequest,
+    ) -> Result<ProviderResponse, ProviderError> {
+        (**self).generate_content_plan(input)
+    }
+    fn regenerate_plan(&self, input: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
+        (**self).regenerate_plan(input)
+    }
+    fn regenerate_scene(&self, input: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
+        (**self).regenerate_scene(input)
+    }
+    fn regenerate_narration(
+        &self,
+        input: &ProviderRequest,
+    ) -> Result<ProviderResponse, ProviderError> {
+        (**self).regenerate_narration(input)
+    }
+}
+
+impl<T: ?Sized + AIProvider> AIProvider for Box<T> {
+    fn name(&self) -> &'static str {
+        (**self).name()
+    }
+    fn generate_planning_draft(
+        &self,
+        input: &ProviderRequest,
+    ) -> Result<ProviderResponse, ProviderError> {
+        (**self).generate_planning_draft(input)
+    }
+    fn generate_content_plan(
+        &self,
+        input: &ProviderRequest,
+    ) -> Result<ProviderResponse, ProviderError> {
+        (**self).generate_content_plan(input)
+    }
+    fn regenerate_plan(&self, input: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
+        (**self).regenerate_plan(input)
+    }
+    fn regenerate_scene(&self, input: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
+        (**self).regenerate_scene(input)
+    }
+    fn regenerate_narration(
+        &self,
+        input: &ProviderRequest,
+    ) -> Result<ProviderResponse, ProviderError> {
+        (**self).regenerate_narration(input)
+    }
+}

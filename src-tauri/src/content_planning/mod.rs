@@ -9,6 +9,7 @@ pub mod provider;
 pub mod repository;
 pub mod service;
 pub mod validation;
+pub mod worker;
 
 pub use derivation::*;
 pub use error::*;
@@ -21,3 +22,4 @@ pub use provider::*;
 pub use repository::*;
 pub use service::*;
 pub use validation::*;
+pub use worker::*;

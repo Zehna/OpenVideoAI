@@ -44,7 +44,7 @@ impl<P: AIProvider> ContentPlanner<P> {
         &self.provider
     }
 
-    fn execute_draft_stage(
+    pub fn execute_draft_stage(
         &self,
         request: &PlanningRequest,
     ) -> Result<String, ContentPlanningError> {
@@ -84,7 +84,7 @@ impl<P: AIProvider> ContentPlanner<P> {
         ))
     }
 
-    fn execute_plan_expansion_stage(
+    pub fn execute_plan_expansion_stage(
         &self,
         request: &PlanningRequest,
         draft_text: &str,
