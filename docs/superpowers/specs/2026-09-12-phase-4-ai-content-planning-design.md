@@ -5,7 +5,8 @@
 **Target branch:** `phase/4-ai-content-planning`  
 **Repository:** `D:\OpenVideoAI`  
 **Base:** `v0.4.0` / commit `0f08683`  
-**Classification:** Architectural subsystem addition
+**Classification:** Architectural subsystem addition  
+**Status:** Revised after design-spec audit; ready for final review before implementation planning
 
 ---
 
@@ -13,11 +14,11 @@
 
 Phase 4 introduces the AI Content Planning layer for OpenVideoAI.
 
-The product must accept either a topic or an existing script and produce a versioned, editable, source-aware `ContentPlan` containing full narration, scene structure, duration estimates, media intent, search queries, image/video prompt hints, claims, and grounding metadata.
+The product accepts either a topic or an existing script and produces a versioned, editable, source-aware `ContentPlan` containing scene structure, narration, duration estimates, visual planning, media intent, stock-search queries, image/video prompt hints, claims, and grounding metadata.
 
-Phase 4 does **not** create or download media, generate speech, modify timelines, or render video. It establishes a stable planning contract for later Topic → Video phases.
+Phase 4 establishes a stable planning contract for later Topic → Video phases. It does **not** create/download media, generate speech, modify timelines, or render video.
 
-Primary user flow:
+Primary flow:
 
 ```text
 Topic ──────┐
@@ -46,38 +47,35 @@ Script ─────┘
 
 ## 2. Design Principles
 
-Phase 4 follows these principles:
-
-1. **Provider-agnostic core.** Planning logic must not depend directly on Gemini-specific transport or response formats.
-2. **Durable-by-default.** AI generation runs through the Phase 2 durable Job Manager rather than blocking frontend IPC requests.
-3. **Versioned content.** Every durable edit or regeneration creates a new immutable content revision.
-4. **Grounding-aware.** Supplied sources and AI-added model knowledge are distinguishable.
-5. **No fake citations.** Providers may only cite logical source IDs supplied by the backend.
-6. **Deterministic tests.** `MockProvider` is the primary provider for automated tests.
-7. **Secrets remain outside durable payloads.** API keys never enter job payloads, content revisions, events, or logs.
-8. **No direct timeline coupling.** Content planning cannot directly mutate timeline state.
-9. **Scope discipline.** TTS, Whisper, stock execution, web research, image/video generation, and timeline insertion remain outside Phase 4.
+1. **Provider-agnostic core.** Planning logic must not depend on Gemini-specific transport details.
+2. **Durable-by-default.** AI generation uses the existing Phase 2 durable Job Manager.
+3. **Versioned content.** Every durable content change creates a new immutable revision.
+4. **Grounding-aware.** Supplied-source claims are distinguishable from model knowledge and uncertain claims.
+5. **No fake citations.** Providers may cite only logical source IDs supplied by the backend.
+6. **Deterministic tests.** `MockProvider` is the primary automated-test provider.
+7. **Secrets stay out of durable state.** API keys never enter job payloads, revision JSON, events, or logs.
+8. **No direct timeline coupling.** Content planning cannot mutate timeline state.
+9. **Canonical derivation.** Plan-level aggregates are derived deterministically from ordered scenes.
+10. **Scope discipline.** TTS, Whisper, stock execution, web research, image/video generation, and timeline insertion remain outside Phase 4.
 
 ---
 
 ## 3. Approved Approach
 
-### 3.1 Input Modes
-
-Phase 4 supports two user inputs:
+### 3.1 Input modes
 
 ```text
 Topic
 Script
 ```
 
-Both are normalized into one `PlanningRequest` and produce the same canonical `ContentPlan` domain model.
+Both normalize into one `PlanningRequest` and produce the same canonical `ContentPlan` model.
 
-### 3.2 Planning Strategy
+### 3.2 Planning strategy
 
 Use a **two-stage planner inside one durable job**.
 
-Stage 1 produces a structured planning draft:
+Stage 1 produces:
 
 ```text
 outline
@@ -86,10 +84,9 @@ duration allocation
 high-level narrative arc
 ```
 
-Stage 2 expands that draft into the complete `ContentPlan`:
+Stage 2 expands the draft into:
 
 ```text
-full narration
 scene narration
 visual descriptions
 media intent
@@ -100,15 +97,13 @@ claims
 source grounding
 ```
 
-This is intentionally not a multi-agent architecture. Phase 4 should remain understandable, testable, and operationally simple.
+The architecture is intentionally not multi-agent in Phase 4.
 
 ---
 
 ## 4. Core Domain Model
 
 ### 4.1 PlanningRequest
-
-Conceptual contract:
 
 ```ts
 interface PlanningRequest {
@@ -132,12 +127,10 @@ inputType is valid
 targetDurationMs > 0
 language is non-empty
 source IDs are unique
-request remains within configured planning-context limits
+request stays within configured planning-context limits
 ```
 
 ### 4.2 ContentPlan
-
-Canonical conceptual contract:
 
 ```ts
 interface ContentPlan {
@@ -150,8 +143,8 @@ interface ContentPlan {
   language: string;
   tone: string;
   targetDurationMs: number;
-  estimatedDurationMs: number;
-  fullNarration: string;
+  estimatedDurationMs: number;   // derived
+  fullNarration: string;         // derived/materialized
   scenes: ContentScene[];
   sourceRefs: SourceRef[];
   generationMetadata: GenerationMetadata | null;
@@ -160,7 +153,22 @@ interface ContentPlan {
 }
 ```
 
-### 4.3 Scene
+### 4.3 Canonical plan-level derivation rules
+
+To avoid two sources of truth:
+
+```text
+estimatedDurationMs = sum(scene.durationEstimateMs ordered by scene.order)
+fullNarration       = ordered scene narrations joined with "\n\n"
+```
+
+`scenes[].narration` and `scenes[].durationEstimateMs` are canonical. The backend recomputes `estimatedDurationMs` and `fullNarration` before validation/persistence for generation, regeneration, and manual-save operations.
+
+Provider-supplied plan-level aggregate values are never trusted as independent canonical state. If present in a provider response they are ignored or checked only for diagnostics.
+
+The Phase 4 UI may display the full narration aggregate, but direct durable editing occurs through scene narration fields so synchronization is deterministic.
+
+### 4.4 ContentScene
 
 ```ts
 interface ContentScene {
@@ -179,9 +187,9 @@ interface ContentScene {
 }
 ```
 
-### 4.4 MediaIntent
+### 4.5 MediaIntent
 
-Supported Phase 4 planning values:
+Supported planning-only values:
 
 ```text
 stock_video
@@ -192,9 +200,7 @@ screen_recording
 text_graphic
 ```
 
-These values express planning intent only. Phase 4 does not execute any media acquisition or generation.
-
-### 4.5 Claim
+### 4.6 Claim
 
 ```ts
 interface Claim {
@@ -207,7 +213,7 @@ interface Claim {
 }
 ```
 
-Grounding status:
+`GroundingStatus`:
 
 ```text
 supported
@@ -218,10 +224,10 @@ modified
 
 Semantics:
 
-- `supported`: the claim is supported by one or more supplied sources and must contain at least one valid `sourceRef`.
-- `model_knowledge`: the claim came from model knowledge outside supplied sources; source references may be empty.
-- `uncertain`: evidence is weak, conflicting, or otherwise insufficient for a confident statement.
-- `modified`: the user changed previously grounded content; historical provenance may remain, but `groundingValid = false` until revalidated.
+- `supported`: must contain at least one valid supplied-source reference and `groundingValid = true`.
+- `model_knowledge`: comes from model knowledge outside supplied sources; it must not masquerade as supplied-source grounding.
+- `uncertain`: evidence is weak/conflicting/insufficient.
+- `modified`: user-edited factual content whose prior grounding is no longer automatically valid; `groundingValid = false`.
 
 ---
 
@@ -254,9 +260,9 @@ interface SourceRef {
 }
 ```
 
-### 5.3 Citation Integrity Rules
+### 5.3 Citation integrity rules
 
-The provider may only return `sourceId` values supplied in `PlanningContext`.
+The provider may only return `sourceId` values supplied in the immutable planning context.
 
 The provider must never invent:
 
@@ -268,21 +274,40 @@ titles
 bibliographic entries
 ```
 
-Backend validation rejects references to unknown source IDs with `source_grounding_invalid`.
+Backend validation rejects unknown/dangling source IDs with `source_grounding_invalid`.
 
 A `supported` claim without a valid source reference is invalid.
 
-A `model_knowledge` claim must not masquerade as source-grounded.
+A `model_knowledge` claim must not be represented as supplied-source grounded.
 
-If supplied sources disagree, the plan must preserve that uncertainty rather than silently picking one source as truth.
+If supplied sources disagree, the output must preserve uncertainty rather than silently selecting one as truth.
 
-Scene-level `sourceRefs` are convenience summaries derived from claim-level grounding, not the canonical grounding source of truth.
+Scene-level `sourceRefs` are convenience summaries derived from claim-level references and are not the canonical grounding source of truth.
+
+### 5.4 Deterministic manual-grounding invalidation
+
+No NLP alignment model is required in Phase 4. The rules are deterministic:
+
+1. If a user manually edits `scene.narration`, **all claims attached to that scene** become:
+
+```text
+groundingStatus = modified
+groundingValid  = false
+```
+
+Their historical `sourceRefs` may remain for provenance but must be visually marked unvalidated.
+
+2. If a user directly edits `claim.text`, only that claim becomes `modified` / `groundingValid = false`.
+
+3. Editing non-factual planning fields such as visual description, media intent, prompts, or search queries does not invalidate claim grounding.
+
+4. A later AI regeneration or explicit future grounding operation may produce new validated claim grounding in a new revision; Phase 4 does not silently revalidate modified claims.
 
 ---
 
 ## 6. Provider Architecture
 
-### 6.1 Provider Boundary
+### 6.1 Boundary
 
 ```text
 ContentPlanner
@@ -292,7 +317,7 @@ AIProvider
 └─ MockProvider
 ```
 
-Conceptual provider interface:
+Conceptual operations:
 
 ```text
 generatePlanningDraft(request, context)
@@ -302,39 +327,49 @@ regenerateScene(...)
 regenerateNarration(...)
 ```
 
-The exact Rust interface may follow existing repository conventions, but public semantics must remain equivalent.
+Exact Rust method names may follow current repository conventions, but ownership boundaries are fixed.
 
-### 6.2 Provider Responsibilities
+### 6.2 Provider responsibilities
 
-Provider responsibilities:
+Providers may:
 
-- construct provider-compatible request bodies from prepared prompts,
+- construct provider-compatible HTTP request bodies from already-prepared prompts,
 - request structured output,
 - deserialize provider responses,
-- return provider usage metadata when available,
-- normalize provider transport errors into internal error categories.
+- expose provider usage metadata when available,
+- normalize provider transport errors.
 
-Provider non-responsibilities:
+Providers must not:
 
-- writing SQLite,
-- incrementing revisions,
-- approving plans,
-- submitting jobs,
-- mutating timelines,
-- resolving Artifact filesystem paths,
-- logging API keys.
+- write SQLite,
+- create/increment plan revisions,
+- approve/archive plans,
+- submit durable jobs,
+- mutate timelines,
+- resolve Artifact filesystem paths,
+- expose/log secrets.
 
 ### 6.3 GeminiProvider
 
-Gemini is the first real provider in Phase 4.
+Gemini is the first real provider. The design requires structured/schema-constrained JSON output where supported by the selected Gemini API/model.
 
-The Gemini implementation should use structured/schema-constrained output where supported by the selected Gemini API/model.
+The design intentionally does **not** lock to an unverified Gemini SDK method name. The implementation plan must verify the current Gemini REST contract/model capability before coding the transport layer.
 
-Backend validation remains authoritative even when Gemini returns schema-valid JSON.
+Backend schema/domain/grounding validation remains authoritative even when Gemini returns schema-valid JSON.
 
-### 6.4 MockProvider
+### 6.4 HTTP client dependency
 
-`MockProvider` must be deterministic and support configurable outcomes for tests:
+Phase 4 may add the following Rust dependency to `src-tauri/Cargo.toml` after compatibility verification:
+
+```toml
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+```
+
+The implementation plan must confirm this is compatible with the existing toolchain/Cargo.lock before changing production dependencies.
+
+### 6.5 MockProvider
+
+`MockProvider` is deterministic and supports configurable outcomes:
 
 ```text
 success
@@ -347,44 +382,37 @@ auth failure
 provider unavailable
 ```
 
-Automated tests must not require network access or consume live AI quota.
+Automated tests must not require network access or live AI quota.
 
 ---
 
 ## 7. Structured Output and Validation
 
-Structured output undergoes two layers of validation.
+Provider output undergoes schema validation and domain validation.
 
-### 7.1 Schema Validation
-
-Validate required types and structural fields.
-
-### 7.2 Domain Validation
-
-At minimum:
+At minimum the backend validates:
 
 ```text
 scene IDs unique
 scene order unique and deterministic
 durationEstimateMs > 0
-estimatedDurationMs > 0
+estimated duration recomputed from scenes
 estimated duration within configured tolerance of target duration
 mediaIntent values valid
 scene narration non-empty
 plan title non-empty
 supported claims have valid source refs
-all source refs resolve to supplied sources
+all source refs resolve to the revision's source snapshot
 no duplicate claim IDs
 no dangling source references
+fullNarration recomputed from ordered scene narration
 ```
 
-Recommended target-duration planning tolerance is approximately ±15% for AI planning output. This is planning validation, not render timing accuracy.
+Recommended target-duration tolerance is approximately ±15% for AI planning output. This is planning validation, not render timing accuracy.
 
 ---
 
 ## 8. Repair and Retry Policy
-
-Provider output repair is bounded.
 
 Per model-generation stage:
 
@@ -398,9 +426,9 @@ Repair attempt 2
 stage fails
 ```
 
-Maximum: three model calls per stage unless implementation constraints justify a stricter limit.
+Maximum three model calls per stage unless implementation constraints justify a stricter bound.
 
-No infinite structured-output repair loop is allowed.
+No infinite repair loop is allowed.
 
 Error policy:
 
@@ -415,22 +443,26 @@ provider_auth_failed
 → failed; do not retry indefinitely
 
 structured_output_invalid
-→ bounded repair inside stage
+→ bounded repair inside the current stage
 
 content_plan_validation_failed
 source_grounding_invalid
-→ fail once repair budget is exhausted
+→ fail when repair budget is exhausted
 ```
 
 ---
 
 ## 9. Durable Job Architecture
 
-### 9.1 Job Types / Operations
+### 9.1 Single job type
 
-Phase 4 uses the existing durable Job Manager.
+All Phase 4 planning and regeneration jobs use one SQLite job type:
 
-Supported planning operations:
+```text
+jobs.job_type = "content.plan"
+```
+
+The operation is stored only inside the immutable payload:
 
 ```text
 generate
@@ -439,11 +471,9 @@ regenerate_scene
 regenerate_narration
 ```
 
-The implementation may use one job type (`content.plan`) with an operation field, or dedicated compatible subtypes, provided Jobs & Queue can represent them consistently.
+A render/planning worker therefore performs type-safe leasing without ever acquiring another subsystem's job.
 
-### 9.2 Immutable Job Payload
-
-Conceptual payload:
+### 9.2 Immutable job payload
 
 ```json
 {
@@ -455,19 +485,20 @@ Conceptual payload:
   "basePlanId": null,
   "baseRevision": null,
   "sceneId": null,
+  "userInstruction": null,
   "provider": "gemini",
   "providerConfigRef": "gemini-default",
   "plannerProfileVersion": 1
 }
 ```
 
-The durable payload must not contain API keys.
+The payload must not contain API keys.
 
-The worker operates on the immutable payload snapshot and must not silently rebuild generation context from newer mutable UI state.
+The worker operates on this immutable snapshot and never silently rebuilds generation context from newer UI state.
 
 ### 9.3 Checkpoints
 
-Generate flow:
+Generate:
 
 ```text
 validate_request
@@ -480,7 +511,7 @@ persist_revision
 finalize
 ```
 
-Regenerate scene flow:
+Scene regeneration:
 
 ```text
 validate_request
@@ -496,25 +527,91 @@ Narration regeneration follows equivalent stage-level checkpointing.
 
 ### 9.4 Idempotency
 
-Conceptual generate identity:
+Job type remains `content.plan`; informative operation names may appear only inside idempotency keys.
+
+Generate:
 
 ```text
-content.plan:<projectId>:<inputHash>:<contextHash>:<plannerProfileVersion>
+content.plan:generate:<projectId>:<inputHash>:<contextHash>:<plannerProfileVersion>
 ```
 
-Conceptual scene regeneration identity:
+Full-plan regeneration:
 
 ```text
-content.regenerate.scene:<planId>:<baseRevision>:<sceneId>:<instructionHash>:<plannerProfileVersion>
+content.plan:regenerate_plan:<planId>:<baseRevision>:<instructionHash>:<plannerProfileVersion>
 ```
 
-Double-clicking Generate or Regenerate must converge on one durable job for an identical immutable request.
+Scene regeneration:
+
+```text
+content.plan:regenerate_scene:<planId>:<baseRevision>:<sceneId>:<instructionHash>:<plannerProfileVersion>
+```
+
+Narration regeneration:
+
+```text
+content.plan:regenerate_narration:<planId>:<baseRevision>:<sceneId>:<instructionHash>:<plannerProfileVersion>
+```
+
+Identical immutable requests converge on one durable job.
 
 ---
 
-## 10. Cancellation, Lease Fencing, and Publication Safety
+## 10. Local Content Planning Worker Lifecycle
 
-AI planning workers must preserve Phase 2 lease-token fencing.
+Phase 4 introduces a dedicated local background worker analogous to the Phase 3 render worker.
+
+Conceptual components:
+
+```text
+LocalContentPlanWorker
+LocalContentPlanWorkerHandle
+start_local_content_plan_worker(...)
+```
+
+### 10.1 Startup
+
+During Tauri application setup, after the database, `JobManager`, provider resolver/registry, and content-plan repositories are ready:
+
+```text
+start_local_content_plan_worker(...)
+```
+
+is called once.
+
+The worker reuses the existing Phase 3-compatible background Tokio runtime strategy rather than creating an unrelated runtime model.
+
+### 10.2 Type-safe polling
+
+The worker loop only acquires:
+
+```text
+job_manager.acquire_next_job_for_type("content.plan", 60)
+```
+
+Recommended baseline lifecycle constants:
+
+```text
+lease duration      = 60 seconds
+heartbeat interval  = 15 seconds
+idle poll interval  = approximately 500 ms–1 s
+```
+
+Exact constants may be centralized/configurable but must preserve enough margin between heartbeat and lease expiration.
+
+### 10.3 Heartbeat and fencing
+
+While processing a provider call, the worker maintains Phase 2 lease-token heartbeats.
+
+Before every checkpoint, revision publication, and terminal completion, the worker must still own the valid lease token.
+
+### 10.4 Shutdown
+
+`start_local_content_plan_worker` returns `LocalContentPlanWorkerHandle` with a cooperative shutdown signal.
+
+The application shutdown path signals the worker and awaits/coordinates clean termination where the existing Tauri lifecycle permits it. No new job may begin after shutdown is requested.
+
+### 10.5 Publication safety
 
 Cancellation is checked:
 
@@ -525,8 +622,6 @@ before persist_revision
 before final completion
 ```
 
-If the underlying provider call supports cancellation, the worker should propagate cancellation where practical.
-
 Critical invariant:
 
 ```text
@@ -534,34 +629,84 @@ cancelled or stale worker
 → MUST NOT publish ContentPlan revision
 ```
 
-Before persisting a generated revision, the worker must still own a valid lease token and the job must not be cancelled.
-
-Before final completion, the worker must still satisfy Phase 2 fenced terminal-state semantics.
+If the provider HTTP call can be cancelled safely, cancellation should be propagated. If not, a late provider response is discarded and cannot be persisted after cancellation/lease loss.
 
 ---
 
-## 11. Persistence — Migration 6
+## 11. Provider Configuration and Secrets
+
+### 11.1 Credential source
+
+Phase 4 uses one standard environment variable for Gemini credentials:
+
+```text
+GEMINI_API_KEY
+```
+
+`ProviderConfigResolver` resolves `providerConfigRef = "gemini-default"` to runtime provider configuration and reads `GEMINI_API_KEY` from the process environment.
+
+If absent:
+
+```text
+provider_auth_missing
+```
+
+No Phase 4 in-app secret storage UI is required. A future settings/credential subsystem may replace the environment-only mechanism without changing the durable job contract.
+
+### 11.2 Secret exclusion
+
+API keys must never appear in:
+
+```text
+job payloads
+job results
+content_plan_revisions.content_json
+content_plan_revisions.generation_metadata_json
+domain events
+logs
+frontend persisted state
+error strings exposed to the UI
+```
+
+### 11.3 Provider status for UI
+
+The backend may expose a safe provider status command returning only non-secret information such as:
+
+```text
+provider
+configured: true/false
+model/profile label
+```
+
+It must never return the credential value.
+
+---
+
+## 12. Persistence — Migration 6
 
 Migrations 1–5 remain immutable.
 
-Phase 4 introduces Migration 6.
+Phase 4 adds Migration 6.
 
-### 11.1 `content_plans`
-
-Conceptual schema:
+### 12.1 `content_plans`
 
 ```text
 id                  TEXT PRIMARY KEY
 project_id          TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE
-current_revision    INTEGER NOT NULL
-status              TEXT NOT NULL
+title               TEXT NOT NULL
+current_revision    INTEGER NOT NULL DEFAULT 1
+status              TEXT NOT NULL DEFAULT 'draft'
 approved_revision   INTEGER NULL
 approved_at         TEXT NULL
 created_at          TEXT NOT NULL
 updated_at          TEXT NOT NULL
 ```
 
-### 11.2 `content_plan_revisions`
+`title` is a current-listing projection/cache of the latest revision's title so project plan lists do not need to deserialize every revision blob.
+
+Whenever a new current revision changes the plan title, `content_plans.title` is updated transactionally with `current_revision`.
+
+### 12.2 `content_plan_revisions`
 
 ```text
 plan_id                  TEXT NOT NULL REFERENCES content_plans(id) ON DELETE CASCADE
@@ -571,14 +716,17 @@ operation_type           TEXT NOT NULL
 content_json             TEXT NOT NULL
 generation_metadata_json TEXT NULL
 created_by               TEXT NOT NULL
-created_at               TEXT NOT NULL
+created_at                TEXT NOT NULL
 PRIMARY KEY(plan_id, revision)
 ```
 
-### 11.3 `content_plan_sources`
+### 12.3 `content_plan_sources`
+
+Source snapshots are revision-scoped to preserve historical reproducibility:
 
 ```text
-plan_id             TEXT NOT NULL REFERENCES content_plans(id) ON DELETE CASCADE
+plan_id             TEXT NOT NULL
+revision            INTEGER NOT NULL
 source_id           TEXT NOT NULL
 source_type         TEXT NOT NULL
 title               TEXT NOT NULL
@@ -589,24 +737,38 @@ locator             TEXT NULL
 content_snapshot    TEXT NOT NULL
 content_hash        TEXT NOT NULL
 created_at          TEXT NOT NULL
-PRIMARY KEY(plan_id, source_id)
+PRIMARY KEY(plan_id, revision, source_id)
+FOREIGN KEY(plan_id, revision)
+    REFERENCES content_plan_revisions(plan_id, revision)
+    ON DELETE CASCADE
 ```
+
+A new revision receives its own immutable source snapshot set. Reusing the same logical `source_id` in a later revision is allowed because `revision` is part of the key.
+
+The implementation must never use `INSERT OR REPLACE` in a way that mutates historical source snapshots.
 
 Recommended indexes:
 
 ```text
 content_plans(project_id)
 content_plan_revisions(plan_id, revision)
-content_plan_sources(plan_id)
+content_plan_sources(plan_id, revision)
+content_plan_sources(plan_id, source_id)
 ```
 
-Canonical plan revision content remains an immutable JSON snapshot in `content_plan_revisions.content_json`.
+Canonical revision content remains an immutable JSON snapshot in `content_plan_revisions.content_json`.
 
-Scenes and claims are **not** separate SQL rows in Phase 4.
+Scenes and claims are not separate SQL rows in Phase 4.
+
+### 12.4 Migration upgrade proof
+
+Migration tests must construct a representative released v0.4.0 / Migration-5 database containing existing Phase 0–3 rows, apply Migration 6, and prove those rows remain intact.
+
+Running Migrations 1–6 only on a fresh empty database is not sufficient release evidence.
 
 ---
 
-## 12. Revision Model
+## 13. Revision Model
 
 Every durable content change creates a new revision.
 
@@ -623,15 +785,16 @@ rev 5  manual_edit
 Invariants:
 
 ```text
-planId remains stable
-revision is strictly monotonic
-currentRevision points to latest durable revision
-old revisions are immutable
+planId stable
+revision strictly monotonic
+current_revision points to latest durable revision
+old revisions immutable
+source snapshots immutable per revision
 ```
 
-Every edit/regeneration operation includes `expectedRevision` or equivalent `baseRevision` optimistic concurrency protection.
+Every manual edit/regeneration uses `expectedRevision` / `baseRevision` optimistic concurrency.
 
-A stale mutation returns:
+A stale operation returns:
 
 ```text
 content_plan_revision_conflict
@@ -641,23 +804,25 @@ No automatic merge is attempted in Phase 4.
 
 ---
 
-## 13. Initial Generation and Status
+## 14. Initial Generation and Status
 
-A successfully generated plan creates:
+A successful first generation creates transactionally:
 
 ```text
+content_plans row
 revision = 1
 status = draft
 operation_type = generate
+revision-1 source snapshots
 ```
 
-`draft` is the default active state.
+The plan row and revision/source snapshots must not be partially published.
 
 ---
 
-## 14. Approval and Archive Semantics
+## 15. Approval and Archive Semantics
 
-### 14.1 Status Values
+### 15.1 Status values
 
 ```text
 draft
@@ -665,9 +830,9 @@ approved
 archived
 ```
 
-### 14.2 Approval
+### 15.2 Approval
 
-Approval is explicit and does not call the AI provider.
+Approval is explicit and does not call an AI provider.
 
 Conceptual operation:
 
@@ -677,12 +842,12 @@ approve_content_plan(planId, expectedRevision)
 
 Approval validates structural correctness, grounding integrity, and configured duration tolerance.
 
-Blocking approval issues:
+Blocking issues:
 
 ```text
 invalid plan structure
 dangling source reference
-supported claim without source support
+supported claim without valid source support
 fatal domain validation error
 ```
 
@@ -691,17 +856,26 @@ Warnings that do not automatically block approval:
 ```text
 model_knowledge claims
 uncertain claims
+modified/unvalidated claims if product policy permits warning-only approval
 ```
 
-Approval marks the current revision as approved and records approval metadata without creating a new content revision when no content changes.
+For Phase 4, `modified` claims should be surfaced as a strong warning. They do not silently regain `supported` status.
 
-### 14.3 Editing an Approved Plan
+Approval records:
 
-An approved revision remains immutable historical evidence.
+```text
+status = approved
+approved_revision = current_revision
+approved_at = now
+```
 
-Editing or regenerating from an approved revision creates a new `draft` revision.
+No new content revision is required if content is unchanged.
 
-Example:
+### 15.3 Editing an approved plan
+
+The approved historical revision remains immutable.
+
+Editing or regenerating from it creates a new draft revision:
 
 ```text
 rev 8 = approved
@@ -709,185 +883,156 @@ edit/regenerate
 rev 9 = draft
 ```
 
-### 14.4 Archive
+`approved_revision` may continue pointing to the last approved historical revision while `status` for the current active plan becomes `draft`.
 
-Archived plans are read-only in normal workflow and are not selected as active plans.
+### 15.4 Archive
+
+Archived plans are read-only in normal workflow and excluded from default active-plan selection.
+
+Archiving is a plan-level workflow state change and does not rewrite historical revision content.
 
 ---
 
-## 15. Manual Editing
+## 16. Manual Editing
 
-The structured editor supports manual durable editing of fields such as:
-
-```text
-title
-summary
-tone
-fullNarration
-scene.title
-scene.narration
-scene.durationEstimateMs
-scene.visualDescription
-scene.mediaIntent
-scene.stockSearchQueries
-scene.imagePrompt
-scene.videoPrompt
-```
-
-Frontend typing stays local until explicit Save Revision.
+The frontend keeps transient editor state locally.
 
 ```text
 typing
 → local dirty state
 → Save Revision
-→ durable revision N+1
+→ one durable new revision
 ```
 
-Do not create a revision per keystroke.
+No durable revision is created per keystroke.
 
-If a user manually changes previously grounded factual text, its grounding must not remain silently valid.
-
-Recommended behavior:
+Save requires:
 
 ```text
-groundingStatus = modified
-groundingValid = false
-historical sourceRefs may be retained for provenance
+planId
+expectedRevision
+edited ContentPlan draft
 ```
+
+Before persistence the backend:
+
+1. applies deterministic grounding invalidation rules,
+2. recomputes plan-level derived fields,
+3. validates the resulting document,
+4. checks optimistic concurrency,
+5. inserts the new revision and revision-scoped source snapshots transactionally,
+6. updates current plan projection fields (`title`, `current_revision`, `status`, `updated_at`).
+
+A new manual edit after an approved revision creates a new draft revision.
 
 ---
 
-## 16. Regeneration Semantics
+## 17. Regeneration Semantics
 
-### 16.1 Full Plan Regeneration
-
-Full regeneration may replace:
+### 17.1 Full-plan regeneration
 
 ```text
-title
-summary
-full narration
-scene structure
-scene narration
-visual planning
-claims
-grounding
+base revision N
+→ regenerate_plan
+→ revision N+1 draft
 ```
 
-It creates a new draft revision and preserves the previous revision.
+The provider may replace the full content-plan body, subject to schema/domain/grounding validation and source constraints.
 
-### 16.2 Scene Regeneration
+### 17.2 Scene regeneration
 
-Scene regeneration receives:
+Only the target scene may be replaced by provider output.
+
+The worker supplies:
 
 ```text
-base plan summary
+overall plan context
 previous scene
 target scene
 next scene
-relevant source context
+relevant source snapshot
 scene duration budget
 optional user instruction
 ```
 
-Only the target scene may change.
-
 All non-target scenes must remain domain-equivalent to the base revision.
 
-### 16.3 Narration-Only Regeneration
-
-Narration regeneration may modify only:
+After replacing the target scene, the backend **always** recomputes:
 
 ```text
-scene.narration
-scene.claims
-scene.sourceRefs / grounding metadata associated with narration
+estimatedDurationMs
+fullNarration
+plan-level sourceRefs summary
 ```
 
-It must not silently modify:
+before validating/persisting the new revision.
+
+### 17.3 Narration-only regeneration
+
+The provider may modify only:
 
 ```text
-scene ordering
-durationEstimateMs
-visualDescription
-mediaIntent
-stockSearchQueries
-imagePrompt
-videoPrompt
+target scene narration
+target scene claims
+target scene sourceRefs/grounding
 ```
 
----
+It must not change:
 
-## 17. Revision Conflict at Job Completion
+```text
+scene durationEstimateMs
+scene title
+visual description
+media intent
+stock search queries
+image prompt
+video prompt
+scene order
+other scenes
+```
 
-A regeneration job is tied to its `baseRevision`.
+After narration replacement the backend recomputes `fullNarration`. `estimatedDurationMs` remains derived from unchanged scene durations and is recomputed as a consistency check.
+
+### 17.4 Base-revision conflict
 
 Before publication:
 
 ```text
-currentRevision == baseRevision
+current_revision == payload.baseRevision
 ```
 
-must still hold for regeneration operations.
+must hold for regeneration jobs.
 
-If a newer revision appeared while the AI job was running, publication fails with:
+If not:
 
 ```text
 content_plan_revision_conflict
 ```
 
-The stale AI result is not persisted as a newer revision over the user's work.
+The stale generated result is discarded and no new revision is published.
 
 ---
 
 ## 18. Source Snapshot Reproducibility
 
-Generation jobs use immutable source-context snapshots.
+Every durable revision owns a revision-scoped immutable source snapshot set in `content_plan_sources`.
 
-The plan revision records references to the source snapshot used for generation.
+For generation, the source snapshot comes from the immutable job payload.
 
-If an external URL changes later, the historical revision must remain attributable to the context snapshot used at generation time.
+For regeneration:
 
-Phase 4 does not attempt to become a document-management or web-crawling system.
+- if the request provides an updated source context, that exact context becomes the new revision's snapshot;
+- otherwise the worker copies the base revision's source snapshots into the new revision.
 
----
+For manual edits, the current revision's source snapshots are copied forward unchanged unless the operation explicitly supplies a new validated source set.
 
-## 19. Prompt Construction
+Historical revision source rows are never updated or replaced.
 
-Prompt construction is a dedicated responsibility, separate from provider transport.
-
-Conceptual components:
-
-```text
-ContentPlanner
-├─ PromptBuilder
-├─ AIProvider
-├─ ContentPlanValidator
-├─ GroundingValidator
-└─ ContentPlanRepository
-```
-
-Structured source context should be rendered with explicit logical IDs, for example:
-
-```text
-SOURCE src_001
-Title: ...
-Author: ...
-Locator: ...
-Content:
-...
-
-SOURCE src_002
-...
-```
-
-Provider instructions must state that only supplied source IDs are valid citations.
+This ensures a revision can always be audited against the exact context used when it was created.
 
 ---
 
-## 20. Generation Metadata and Usage
-
-Revision generation metadata should capture reproducibility and usage information where available:
+## 19. Generation Metadata and Usage
 
 ```ts
 interface GenerationMetadata {
@@ -906,171 +1051,241 @@ interface GenerationMetadata {
 }
 ```
 
-Provider cost is optional and nullable.
-
-Phase 4 does not implement a billing subsystem.
+Do not store raw secret-bearing prompts or unrestricted provider responses in this metadata.
 
 ---
 
-## 21. Provider Configuration and Secrets
+## 20. Prompt Construction
 
-Durable payloads store a provider reference, not credentials.
+`PromptBuilder` prepares structured context for the provider.
 
-```text
-provider = gemini
-providerConfigRef = gemini-default
-model = configured/default planning model
-```
-
-At runtime:
+Supplied sources use explicit backend-owned logical IDs:
 
 ```text
-AI worker
-→ ProviderConfigResolver
-→ secure local configuration / environment
-→ Gemini credential
+SOURCE src_001
+Title: ...
+Author: ...
+Locator: ...
+Content:
+...
 ```
 
-API keys must never be persisted in:
+Provider instructions must include equivalent semantics to:
 
 ```text
-job payloads
-job results
-domain events
-content plan revisions
-frontend persisted state
-normal logs
+You may cite only source IDs supplied in ALLOWED_SOURCES.
+Never invent source IDs, titles, authors, URLs, or locators.
+If a factual statement is not supported by supplied sources,
+mark it model_knowledge or uncertain.
 ```
 
-Missing credentials return a typed safe error such as:
-
-```text
-provider_auth_missing
-```
+Prompt templates are versioned (`promptTemplateVersion`).
 
 ---
 
-## 22. Logging and Observability
+## 21. Context and Request Limits
 
-Safe log fields include:
+The backend enforces bounded planning inputs.
 
-```text
-jobId
-planId
-revision
-provider
-model
-stage
-attempt
-latencyMs
-inputTokenCount
-outputTokenCount
-validation result
-error code
-```
-
-Normal logs must not include:
+At minimum configuration covers:
 
 ```text
-API keys
-raw secrets
-unrestricted full source context
-unsanitized provider responses
-canonical filesystem paths
+maximum input text length
+maximum source count
+maximum source snapshot size
+maximum combined planning-context size
+maximum scene count
+maximum target duration
 ```
 
----
-
-## 23. Planning Context Limits
-
-Phase 4 must enforce configurable planning-context limits.
-
-Limits cover:
-
-```text
-inputText length
-source count
-total source context size
-scene count
-target duration
-```
-
-The exact numerical limits should be chosen during implementation based on actual provider/model constraints and product usability, not guessed in this design document.
-
-Requests exceeding configured limits return:
+If the validated context exceeds the Phase 4 budget:
 
 ```text
 planning_context_too_large
 ```
 
-A reasonable default maximum scene count may be approximately 50, but implementation should make this configurable.
+Exact limits should be centralized and selected during implementation using the verified model/context capability rather than scattered magic numbers.
 
 ---
 
-## 24. Error Model
+## 22. Error Model
 
-Public/internal typed error categories include:
+Public error categories include:
 
 ```text
+content_plan_not_found
+content_plan_revision_not_found
+content_plan_revision_conflict
+content_plan_archived
+invalid_planning_request
+planning_context_too_large
+content_plan_validation_failed
+source_grounding_invalid
 provider_auth_missing
 provider_auth_failed
 provider_rate_limited
 provider_timeout
 provider_unavailable
 structured_output_invalid
-content_plan_validation_failed
-source_grounding_invalid
-planning_context_too_large
-content_plan_revision_conflict
-content_plan_not_found
-content_plan_archived
+planning_cancelled
 stale_lease
-job_cancelled
+content_plan_persist_failed
 ```
 
-The frontend must not receive raw Rust stack traces, unrestricted provider bodies, API keys, or internal prompts.
+UI-facing errors must not contain raw Rust backtraces, SQL errors, secret values, unrestricted raw provider responses, or full internal prompts.
 
 ---
 
-## 25. Planner UI
+## 23. Tauri IPC Contract
 
-Phase 4 adds an **AI Planner** application area.
+Phase 4 uses typed Tauri commands consistent with existing Phase 3 command registration patterns.
 
-Primary flow:
+Minimum IPC surface:
+
+### 23.1 Submit initial generation
 
 ```text
-Project
-→ AI Planner
-→ Topic / Script
-→ target duration
-→ language
-→ tone
-→ optional sources
-→ Generate
-→ durable job
-→ Content Plan Editor
+submit_content_plan_job(
+  project_id,
+  planning_request,
+  provider_config_ref?
+) -> Job
 ```
 
-### 25.1 Planner Input
+Submits a `content.plan` job with operation `generate`.
 
-Required controls:
+### 23.2 Get current plan
+
+```text
+get_content_plan(plan_id) -> ContentPlan
+```
+
+Returns the current revision plus safe plan metadata.
+
+### 23.3 List project plans
+
+```text
+list_project_content_plans(project_id) -> ContentPlanSummary[]
+```
+
+Summary uses relational projection fields such as `id`, `title`, `status`, `current_revision`, and timestamps; it must not require deserializing every revision JSON row.
+
+### 23.4 Save manual revision
+
+```text
+save_content_plan_revision(
+  plan_id,
+  expected_revision,
+  content
+) -> ContentPlan
+```
+
+Applies grounding invalidation, derived-field recomputation, validation, and optimistic concurrency before creating a new draft revision.
+
+### 23.5 Submit regeneration
+
+```text
+submit_content_plan_regeneration(
+  plan_id,
+  base_revision,
+  operation,
+  scene_id?,
+  user_instruction?,
+  source_context?
+) -> Job
+```
+
+`operation` is one of:
+
+```text
+regenerate_plan
+regenerate_scene
+regenerate_narration
+```
+
+### 23.6 Approve
+
+```text
+approve_content_plan(
+  plan_id,
+  expected_revision
+) -> ContentPlanSummary
+```
+
+### 23.7 Archive
+
+```text
+archive_content_plan(
+  plan_id,
+  expected_revision
+) -> ContentPlanSummary
+```
+
+Archive uses optimistic concurrency so a stale UI cannot archive a newer plan accidentally.
+
+### 23.8 Revision history
+
+```text
+get_content_plan_history(plan_id) -> ContentPlanRevisionSummary[]
+get_content_plan_revision(plan_id, revision) -> ContentPlan
+```
+
+Historical revisions are read-only.
+
+### 23.9 Safe provider status
+
+```text
+get_planner_provider_status() -> PlannerProviderStatus
+```
+
+Returns only safe configuration state such as provider/model label and `configured: bool`.
+
+Rust parameter naming follows repository conventions; frontend wrappers may map to Tauri's expected camelCase argument keys.
+
+---
+
+## 24. Frontend Planner Workflow
+
+### 24.1 Navigation
+
+Within an opened project, `ProjectDetail` adds an **AI Planner** action alongside the existing timeline/editor workflow.
+
+Main application navigation gains an `AI Planner` view for the active project without removing existing Projects, Editor, Jobs & Queue, or System Health flows.
+
+### 24.2 Plan list
+
+AI Planner starts with the project's content-plan list:
+
+```text
+Title
+Status
+Current revision
+Last updated
+Open
+```
+
+Multiple plans per project are supported.
+
+Archived plans are hidden by default or visually separated.
+
+### 24.3 New-plan form
 
 ```text
 Topic / Script mode
-input text
-target duration
-language
-tone/style
-optional source context
-provider: Gemini
+Input text
+Target duration
+Language
+Tone/style
+Optional sources
+Provider status: Gemini configured/not configured
 Generate
 ```
 
-Phase 4 does not need a model marketplace or large provider selector UI.
+Generation returns a durable job ID. The user may navigate away while it runs.
 
-### 25.2 Content Plan Editor
+### 24.4 Structured editor
 
-Conceptual layout:
+Recommended layout:
 
 ```text
 ┌──────────────────────────────────────────────────────────┐
@@ -1087,218 +1302,260 @@ Conceptual layout:
 └───────────────────┴──────────────────────────────────────┘
 ```
 
-Also expose plan-level:
+The full narration aggregate is viewable/exportable and synchronized from scene narration; it is not an independent durable editable source in Phase 4.
+
+### 24.5 Dirty-state semantics
 
 ```text
-summary
-full narration
-target duration
-estimated duration
-language
-tone
+typing
+→ local dirty state
+→ Save Revision
+→ durable revision N+1
 ```
 
-### 25.3 Dirty State
+Navigating away with unsaved changes requires Save/Discard confirmation.
 
-Unsaved manual edits stay local.
+Regeneration cannot start while local unsaved edits are unresolved.
 
-When navigating away from dirty state, UI must prompt Save or Discard.
+### 24.6 Regeneration UX
 
-Regeneration must not silently discard unsaved local edits.
-
-### 25.4 Revision History
-
-Display operation lineage such as:
-
-```text
-Rev 1  AI Generate
-Rev 2  Manual Edit
-Rev 3  Regenerate Scene 4
-Rev 4  Approved
-Rev 5  Regenerate Narration
-```
-
-Historical revisions open read-only.
-
-A simple field/scene-level comparison is sufficient for Phase 4. A rich diff engine is not required.
-
-### 25.5 Regeneration UX
-
-Controls:
+Plan level:
 
 ```text
 Regenerate Entire Plan
+```
+
+Scene level:
+
+```text
 Regenerate Scene
 Regenerate Narration
 ```
 
-Scene/narration regeneration may accept an optional natural-language instruction.
+Regeneration may accept a small optional user instruction.
 
-The UI must explain that regeneration creates a new draft revision and preserves the previous revision.
+The UI clearly states that regeneration creates a new draft revision and preserves the previous revision.
 
-### 25.6 Approval UX
+### 24.7 Revision history
 
-Before approval, show validation summary such as:
+History shows at least:
+
+```text
+revision
+operation type
+created_by
+created_at
+approval indication where applicable
+```
+
+Historical revisions open read-only.
+
+A lightweight field/scene change summary is allowed; a full rich diff engine is not required.
+
+### 24.8 Approval summary
+
+Before approval the UI shows validation information such as:
 
 ```text
 scene count
-target vs estimated duration
-citation integrity
-model-knowledge claim count
+estimated duration vs target
+source-reference validity
+model_knowledge claim count
 uncertain claim count
+modified/unvalidated claim count
 ```
 
-Warnings may remain approvable; structural/grounding errors block approval.
+Fatal structural/grounding errors block approval. Warnings remain visible.
 
-### 25.7 Citation UX
+### 24.9 Citation display
 
-Example claim display:
+Supported claim:
 
 ```text
-Claim: "..."
-Status: Supported
-Sources:
-- Source A — p. 42
+Supported
+Source A — p. 42
 ```
 
-`model_knowledge` should clearly state that the claim is not grounded in supplied sources.
+Model knowledge:
 
-`uncertain` should display a review warning.
+```text
+AI knowledge — not grounded in supplied sources
+```
 
-`modified` should display that previous grounding requires revalidation.
+Uncertain:
+
+```text
+Needs review
+```
+
+Modified:
+
+```text
+Modified after grounding — citation requires revalidation
+```
+
+### 24.10 Jobs integration
+
+Planner UI does not create a second job system.
+
+It links to the existing Jobs & Queue view for the `content.plan` job and its checkpoints.
 
 ---
 
-## 26. Jobs & Queue Integration
+## 25. Domain Events
 
-Do not create a second job UI.
+Phase 4 may persist/broadcast versioned domain events through the existing transactional-event + post-commit broadcast architecture.
 
-AI planning jobs appear in the existing Jobs & Queue experience.
-
-The Planner UI may provide a `View Job` shortcut.
-
-User-facing stage labels may map to internal checkpoints, for example:
+Recommended events include:
 
 ```text
-Queued
-Preparing context
-Planning outline
-Expanding content
-Validating
-Saving revision
-Completed
+content_plan.created
+content_plan.revision_created
+content_plan.approved
+content_plan.archived
 ```
+
+Events contain logical identifiers and safe metadata only. They must not contain API keys, raw prompts, full source snapshots, or unrestricted provider responses.
+
+Revision creation event persistence should occur in the same transaction as the new revision where existing event infrastructure permits it, followed by post-commit broadcast.
+
+---
+
+## 26. Security and Logging
+
+Never log:
+
+```text
+GEMINI_API_KEY
+full secret-bearing prompt text
+full source snapshots by default
+unrestricted raw provider responses
+canonical private filesystem paths
+```
+
+Safe structured logging may include:
+
+```text
+jobId
+planId
+revision
+provider
+model
+operation
+stage
+attempt
+latencyMs
+inputTokenCount?
+outputTokenCount?
+validationResult
+errorCode
+```
+
+All frontend/provider error messages are sanitized.
 
 ---
 
 ## 27. Testing Strategy
 
-### 27.1 Migration Tests
+### 27.1 Migration tests
 
-Required:
+- fresh Migration 6 schema,
+- migration runner idempotency,
+- real Migration 5 → 6 upgrade with representative Phase 0–3 data preserved,
+- revision-scoped source snapshots permit same logical source ID in different revisions,
+- historical snapshots are immutable.
 
-- Migration 6 applies cleanly.
-- Migration 6 runner remains idempotent.
-- A real Migration-5 / v0.4.0 database upgrades to Migration 6 without losing Phase 0–3 data.
-- Projects, artifacts, media metadata, timeline data, history, jobs, and events remain valid after upgrade.
+### 27.2 Domain tests
 
-### 27.2 Domain Tests
+- valid ContentPlan,
+- duplicate scene ID/order rejected,
+- invalid durations rejected,
+- media intent validation,
+- `estimatedDurationMs` derived correctly,
+- `fullNarration` derived correctly,
+- title/narration requirements.
 
-At minimum:
+### 27.3 Versioning tests
 
-- valid `ContentPlan`,
-- invalid/duplicate scene order,
-- invalid scene duration,
-- media-intent validation,
-- target-duration tolerance,
-- unique scene IDs,
-- unique claim IDs.
-
-### 27.3 Grounding Tests
-
-At minimum:
-
-- unknown source ID rejected,
-- `supported` claim without source rejected,
-- `model_knowledge` with no source accepted,
-- modified claim invalidates grounding,
-- dangling references rejected,
-- conflicting source representation can produce `uncertain`.
-
-### 27.4 Repository and Revision Tests
-
-At minimum:
-
-- create revision 1,
-- manual edit creates revision 2,
-- old revision immutable,
+- first generation creates revision 1 draft,
+- manual edit creates revision N+1,
+- revision strictly monotonic,
 - stale `expectedRevision` rejected,
 - approved revision preserved,
-- editing approved revision creates draft revision,
-- archive semantics,
-- revision lineage persisted.
+- edit/regenerate after approval creates draft revision,
+- archive optimistic concurrency and read-only semantics.
 
-### 27.5 Regeneration Tests
+### 27.4 Grounding tests
 
-At minimum:
+- unknown/fake source ID rejected,
+- supported claim without source rejected,
+- model knowledge valid without supplied-source reference,
+- conflicting source output remains uncertain,
+- scene narration manual edit invalidates all scene claims,
+- direct claim edit invalidates only that claim,
+- non-factual field edit does not invalidate claim grounding.
 
-- full plan regeneration creates a new revision,
-- scene regeneration changes only target scene,
-- narration regeneration changes only narration/claims/grounding fields,
-- unrelated scenes remain equivalent,
-- regeneration against stale base revision fails safely.
-
-### 27.6 Provider Tests
+### 27.5 Provider/repair tests
 
 Using `MockProvider`:
 
-```text
-success
-malformed output
-repair success
-repair exhausted
-rate limit
-timeout
-auth failure
-provider unavailable
-```
+- successful draft/content generation,
+- malformed output,
+- repair succeeds,
+- repair budget exhausted,
+- rate limit maps retryable,
+- timeout maps retryable,
+- auth failure maps non-retryable,
+- provider unavailable maps retryable.
 
-### 27.7 Job Integration Tests
+### 27.6 Job/worker tests
 
-At minimum:
-
-- queued → running → completed,
-- checkpoint order,
-- retryable transient provider failure,
-- idempotent submission,
+- type-filtered worker only leases `content.plan`,
+- generate queued → running → completed,
+- expected checkpoint sequence,
+- idempotent double submit,
+- heartbeat lease extension,
 - cancellation before provider call,
-- cancellation after provider response but before persistence,
-- stale lease cannot persist revision,
-- stale lease cannot complete job,
-- concurrent newer revision blocks stale regeneration publication.
+- cancellation after provider call but before persistence,
+- stale lease cannot publish a revision,
+- revision conflict at publication discards generated result,
+- clean worker shutdown.
 
-### 27.8 Frontend Tests
+### 27.7 Regeneration tests
+
+- full plan regeneration creates new draft revision,
+- scene regeneration changes only target scene plus derived aggregates,
+- narration regeneration changes only allowed target fields plus derived aggregates,
+- all unaffected scenes remain domain-equivalent,
+- base-revision conflict prevents publication.
+
+### 27.8 IPC tests
+
+Cover every command in Section 23, including argument mapping, optimistic revision behavior, safe provider status, and returned types.
+
+### 27.9 Frontend tests
 
 At minimum:
 
-- Topic/Script input modes,
-- generate submission,
-- job navigation,
-- plan load,
-- scene selection,
-- manual dirty state,
+- AI Planner navigation from active project,
+- project plan list,
+- Topic/Script mode,
+- optional sources,
+- Generate job submission,
+- provider-not-configured state,
+- structured editor load,
+- local dirty state,
 - Save Revision,
 - revision conflict handling,
-- regenerate plan,
-- regenerate scene,
-- regenerate narration,
+- regenerate plan/scene/narration,
+- history read-only view,
 - approval warnings/errors,
-- revision history view,
-- citation status rendering.
+- archive flow,
+- Jobs & Queue navigation.
 
-### 27.9 Live Gemini Acceptance
+### 27.10 Live Gemini acceptance
 
-A live Gemini acceptance test runs only when valid credentials are available.
+A live Gemini acceptance test runs only when `GEMINI_API_KEY` is available.
 
 Flow:
 
@@ -1306,9 +1563,8 @@ Flow:
 simple topic
 → submit content.plan
 → Gemini structured output
-→ validation
-→ grounding validation
-→ persist revision
+→ schema/domain/grounding validation
+→ persist revision 1
 → completed
 ```
 
@@ -1317,54 +1573,60 @@ Validate:
 ```text
 plan valid
 scene count > 0
-narration non-empty
+scene narration non-empty
 no invented source IDs
 revision persisted
-generation metadata recorded
+provider/model metadata recorded
 ```
 
-If credentials are unavailable, use an explicit environment skip. Do not fake a live-provider pass.
+If the environment variable is absent, the test reports an explicit environment/credential skip. It must never fake a live success.
 
 ---
 
-## 28. Desktop Runtime Acceptance
+## 28. Runtime Acceptance
 
-Phase 4 closure requires real Tauri runtime smoke:
+Using the actual Tauri desktop application:
 
 ```text
-1. Launch OpenVideoAI.
-2. Open/create project.
-3. Open AI Planner.
-4. Generate from a topic using MockProvider or configured Gemini.
-5. Observe durable planning job in Jobs & Queue.
-6. Open resulting ContentPlan.
-7. Edit a scene and Save Revision.
-8. Regenerate one scene.
-9. Regenerate narration for one scene.
-10. Inspect citation/grounding states.
-11. Approve a valid revision.
-12. Edit/regenerate from approved revision and confirm new draft revision.
-13. Close application.
-14. Relaunch application.
-15. Confirm plans, revisions, sources, approval state, and history persist.
+1. Open/create project.
+2. Open AI Planner.
+3. Confirm Gemini configuration status is displayed safely.
+4. Enter topic or script.
+5. Configure duration/language/tone.
+6. Add optional source context.
+7. Generate.
+8. Confirm content.plan appears in Jobs & Queue.
+9. Confirm job progresses through checkpoints.
+10. Open generated draft plan.
+11. Edit scene narration and save a new revision.
+12. Confirm grounding invalidation behavior.
+13. Regenerate one scene.
+14. Confirm only target scene + derived aggregates changed.
+15. Regenerate narration.
+16. Confirm visual/media planning fields stayed unchanged.
+17. Review claims/citations.
+18. Approve plan.
+19. Edit/regenerate approved plan and confirm new revision becomes draft while approved historical revision remains.
+20. Restart OpenVideoAI.
+21. Confirm plans, revisions, sources, approval status, and Jobs data persist.
 ```
 
-No blank/black window or unhandled WebView errors are acceptable.
+No blank/black WebView window or unhandled frontend console error is acceptable.
 
 ---
 
-## 29. Security and Robustness Rules
+## 29. Performance and Robustness Guardrails
 
-1. API keys never enter durable payloads or logs.
-2. Providers may cite only source IDs supplied by backend context.
-3. Unsupported provider-generated source IDs are rejected.
-4. Provider transport is separated from domain validation.
-5. Cancellation/stale lease cannot publish a revision.
-6. Optimistic revision control prevents stale AI results from overwriting newer user work.
-7. Source context is bounded by configured limits.
-8. Raw provider response bodies are not exposed directly to normal frontend errors.
-9. Historical revisions remain immutable.
-10. Phase 0–3 persistence contracts remain preserved.
+```text
+source snapshots bounded by validated context budget
+no AI call on UI thread
+no synchronous long-running Tauri command waiting for Gemini generation
+JSON snapshots written transactionally
+no per-keystroke durable revisions
+provider retries bounded
+worker heartbeat continues during long provider calls
+historical revisions/source snapshots never rewritten
+```
 
 ---
 
@@ -1373,68 +1635,63 @@ No blank/black window or unhandled WebView errors are acceptable.
 ### Included
 
 ```text
-AI Content Planner
 Topic input
 Script input
 Optional source context
-Two-stage planning
-Gemini provider
-Deterministic MockProvider
-Structured output validation
-ContentPlan v1 domain
-Full narration
+ContentPlan domain
+Full narration aggregate
 Scene planning
-Media intent planning
-Stock search query hints
+Media intent
+Stock search-query hints
 Image/video prompt hints
-Claim/source grounding
-Fake-citation prevention
-Durable content.plan jobs
-Versioned ContentPlans
-Manual editing
-Regenerate whole plan
+Claim grounding/citation integrity
+Gemini provider
+Mock provider
+Durable content.plan worker
+Migration 6
+Versioned revisions
+Manual structured editing
+Regenerate plan
 Regenerate scene
 Regenerate narration
-Approval/archive semantics
+Approval/archive
 Revision history
-Planner UI
+AI Planner UI
 Jobs & Queue integration
-Provider usage metadata
+Usage metadata
 ```
 
 ### Explicitly excluded
 
 ```text
 TTS
-Whisper / transcription
+Whisper
+speech synthesis
 automatic captions
-stock media search/download execution
+stock-media search/download execution
 web research engine
-web crawling
+autonomous crawling/scraping
 AI image generation
 AI video generation
-Veo execution
 ComfyUI
 Kaggle
 remote workers
-timeline insertion
-automatic timeline generation
+automatic timeline insertion
+timeline mutation by AI
 rendering changes
-Activepieces
 server mode
-collaboration
-multi-user comments
-rich text document editor
-full academic citation formatter
+multi-user collaboration
+rich document editor
+billing system
 ```
 
-Stop rather than silently expanding into excluded functionality.
+Stop rather than silently expanding Phase 4 into excluded functionality.
 
 ---
 
-## 31. Migration and Release Discipline
+## 31. Release and Migration Discipline
 
-Expected release progression:
+Expected progression:
 
 ```text
 v0.1.0  Foundation
@@ -1449,7 +1706,8 @@ Before implementation:
 1. branch `phase/4-ai-content-planning` must be based on `v0.4.0`,
 2. working tree must be clean,
 3. Phase 3 quality gates must remain green,
-4. Migrations 1–5 must remain immutable.
+4. Migrations 1–5 must remain immutable,
+5. the design spec must be approved after this revision review.
 
 Do not tag `v0.5.0` until external release-close audit authorizes it.
 
@@ -1459,45 +1717,37 @@ Do not tag `v0.5.0` until external release-close audit authorizes it.
 
 Phase 4 is PASS only if all applicable items are evidenced:
 
-- [ ] Branch is based on `v0.4.0`
-- [ ] Phase 0–3 regressions remain green
+- [ ] Phase 3 base preserved
 - [ ] Migration 6 upgrades real Migration-5 DB without data loss
-- [ ] Migrations 1–5 remain unchanged
-- [ ] Topic input works
-- [ ] Script input works
+- [ ] `content_plan_sources` snapshots are immutable per revision
+- [ ] Plan titles list without parsing all revision JSON
+- [ ] ContentPlan generation works from Topic
+- [ ] ContentPlan generation works from Script
 - [ ] Optional source context works
-- [ ] Two-stage planning works
-- [ ] Structured output validation works
-- [ ] Bounded repair policy works
-- [ ] `MockProvider` is deterministic
-- [ ] Gemini provider integration works
-- [ ] No API key persists in jobs/revisions/events/logs
-- [ ] `ContentPlan` revision 1 persists
-- [ ] Manual edit creates new revision
-- [ ] Revisions are immutable and monotonic
-- [ ] Stale revision write rejected
-- [ ] Approved revision preserved
-- [ ] Editing approved revision creates draft revision
+- [ ] Fake/dangling citations are rejected
+- [ ] Supported/model_knowledge/uncertain/modified semantics enforced
+- [ ] Manual narration edit invalidates scene claims deterministically
+- [ ] Plan-level derived fields remain synchronized
+- [ ] Manual save creates a new revision
+- [ ] Revision conflicts enforced
+- [ ] Approval semantics work
+- [ ] Approved historical revision preserved after edit/regeneration
 - [ ] Archive semantics work
-- [ ] Full-plan regeneration works
-- [ ] Scene regeneration changes only target scene
-- [ ] Narration regeneration changes only allowed fields
-- [ ] Fake source IDs rejected
-- [ ] Supported claims require valid source refs
-- [ ] Model-knowledge claims are distinguishable
-- [ ] Modified claims invalidate grounding
-- [ ] Source conflict can be represented as uncertain
-- [ ] Durable planning jobs use idempotency
-- [ ] Planning jobs expose checkpoints
+- [ ] Regenerate full plan works
+- [ ] Regenerate scene is isolated
+- [ ] Regenerate narration is isolated
+- [ ] MockProvider deterministic
+- [ ] Bounded structured-output repair works
+- [ ] `jobs.job_type` strictly `content.plan` for all planning operations
+- [ ] Type-filtered AI worker lifecycle works
 - [ ] Cancellation prevents revision publication
 - [ ] Stale lease prevents revision publication
-- [ ] Stale base revision blocks regeneration publication
-- [ ] Planner UI supports structured editing
-- [ ] Planner UI supports history
-- [ ] Planner UI supports regeneration controls
-- [ ] Planner UI supports approval/archive
-- [ ] Citation/grounding states are visible
-- [ ] Frontend TypeScript check PASS
+- [ ] API key absent from jobs/revisions/events/logs/frontend state
+- [ ] `GEMINI_API_KEY` missing state handled safely
+- [ ] AI Planner project navigation works
+- [ ] Tauri IPC commands covered by tests
+- [ ] Phase 0–3 regression tests remain green
+- [ ] TypeScript check PASS
 - [ ] Frontend tests PASS
 - [ ] Frontend production build PASS
 - [ ] Rust fmt PASS
@@ -1512,27 +1762,33 @@ Phase 4 is PASS only if all applicable items are evidenced:
 
 ---
 
-## 33. Design Approval Record
+## 33. Design Approval and Audit Record
 
-The user approved the following design decisions during the Phase 4 brainstorming process:
+The user approved the architectural design sections covering:
 
-1. both Topic and Script are supported inputs,
-2. both normalize into one canonical `ContentPlan`,
-3. Phase 4 produces full narration and complete scene planning but no media execution,
-4. provider abstraction is introduced with Gemini as the first real provider and deterministic MockProvider for tests,
-5. AI planning uses durable jobs rather than synchronous frontend blocking,
-6. ContentPlans are versioned and support draft/approved/archived states,
-7. regeneration is supported at whole-plan, scene, and narration scope,
-8. the Planner UI is a structured editable editor rather than read-only JSON,
-9. optional source context is supported without a web-research engine,
-10. claims support source-level grounding and citation provenance,
-11. scenes carry structured media intent, search queries, and image/video prompt hints,
-12. the planner uses a two-stage generation architecture,
-13. revisions are immutable JSON snapshots with relational plan/source metadata,
-14. fake citations are rejected through backend source-ID validation,
-15. approval preserves historical approved revisions,
-16. AI workers use cancellation, lease fencing, and optimistic revision publication checks,
-17. Phase 4 uses Migration 6 and leaves Migrations 1–5 immutable,
-18. Phase 4 does not include TTS, Whisper, stock execution, image/video generation, timeline insertion, web research, ComfyUI, Kaggle, or server mode.
+1. Topic/Script → canonical ContentPlan input model,
+2. complete narration + scene planning without media execution,
+3. provider abstraction with Gemini first and deterministic MockProvider,
+4. durable `content.plan` jobs,
+5. versioned revisions and draft/approved/archived states,
+6. granular plan/scene/narration regeneration,
+7. structured Planner UI,
+8. optional source context,
+9. claim-level grounding and citation integrity,
+10. media intent/search/prompt planning,
+11. security, cancellation, lease fencing, testing, and release gates.
 
-This document is the formal written design for OpenVideoAI Phase 4 — AI Content Planning.
+A repository-aware design-spec audit then required corrections before implementation planning. This revision resolves those findings by explicitly defining:
+
+- revision-scoped `content_plan_sources` primary key and foreign key,
+- `content_plans.title` plus safe defaults,
+- deterministic plan-level derived fields,
+- deterministic manual grounding invalidation,
+- one strict `content.plan` job type,
+- `LocalContentPlanWorker` startup/polling/heartbeat/shutdown lifecycle,
+- concrete Tauri IPC surface,
+- project-level AI Planner navigation and multi-plan listing,
+- `GEMINI_API_KEY` credential source,
+- planned `reqwest` transport dependency without inventing Gemini SDK methods.
+
+This document is the authoritative Phase 4 design pending final review approval. Implementation planning must not begin until that approval is given.
