@@ -1,6 +1,7 @@
 pub mod derivation;
 pub mod error;
 pub mod grounding;
+pub mod jobs;
 pub mod model;
 pub mod planner;
 pub mod prompt;
@@ -12,6 +13,7 @@ pub mod validation;
 pub use derivation::*;
 pub use error::*;
 pub use grounding::*;
+pub use jobs::*;
 pub use model::*;
 pub use planner::*;
 pub use prompt::*;
