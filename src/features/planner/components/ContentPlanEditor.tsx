@@ -371,9 +371,9 @@ export const ContentPlanEditor: React.FC<ContentPlanEditorProps> = ({
             <Button
               variant="secondary"
               className="text-xs text-rose-300 hover:bg-rose-950/60 border-rose-900/60"
-              disabled={isDirty}
+              disabled={isDirty || isReadOnly}
               onClick={handleArchive}
-              title="Archive this content plan"
+              title={isReadOnly ? 'Cannot archive while viewing historical revision' : 'Archive this content plan'}
             >
               Archive
             </Button>
@@ -663,11 +663,19 @@ export const ContentPlanEditor: React.FC<ContentPlanEditorProps> = ({
               </div>
             </div>
 
-            {/* Warning for unverified claims */}
-            {(uncertainCount > 0 || modifiedCount > 0) && (
+            {/* Warning for ungrounded claims */}
+            {(modelKnowledgeCount > 0 || uncertainCount > 0 || modifiedCount > 0) && (
               <div className="p-3 bg-amber-950/50 border border-amber-800/60 rounded-lg text-amber-200 text-xs">
-                <span className="font-semibold block mb-0.5">Warning: Plan contains unverified or modified claims</span>
-                This plan contains {uncertainCount} uncertain and {modifiedCount} modified claims. Verify factual accuracy before approval.
+                <span className="font-semibold block mb-0.5">Warning: Plan contains ungrounded or modified claims</span>
+                This plan contains{' '}
+                {[
+                  modelKnowledgeCount > 0 ? `${modelKnowledgeCount} AI knowledge` : null,
+                  uncertainCount > 0 ? `${uncertainCount} uncertain` : null,
+                  modifiedCount > 0 ? `${modifiedCount} modified` : null,
+                ]
+                  .filter(Boolean)
+                  .join(', ')}{' '}
+                claims. Verify factual accuracy before approval.
               </div>
             )}
 

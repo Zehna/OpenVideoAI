@@ -244,6 +244,8 @@ describe('ContentPlanEditor Component', () => {
     expect(await screen.findByText(/Viewing Historical Revision 1/i)).toBeInTheDocument();
     const saveBtn = screen.getByRole('button', { name: /Save Revision/i });
     expect(saveBtn).toBeDisabled();
+    const archiveBtn = screen.getByRole('button', { name: /Archive/i });
+    expect(archiveBtn).toBeDisabled();
   });
 
   it('prompts user confirmation on back navigation when dirty and respects cancel/confirm', async () => {
@@ -460,7 +462,7 @@ describe('ContentPlanEditor Component', () => {
     expect(screen.getByText(/• 1 AI knowledge/i)).toBeInTheDocument();
     expect(screen.getByText(/• 1 uncertain/i)).toBeInTheDocument();
     expect(screen.getByText(/• 1 modified/i)).toBeInTheDocument();
-    expect(screen.getByText(/Warning:.*unverified or modified/i)).toBeInTheDocument();
+    expect(screen.getByText(/Warning:.*ungrounded or modified/i)).toBeInTheDocument();
 
     const confirmApproveBtn = screen.getByRole('button', { name: /Confirm Approval/i });
     fireEvent.click(confirmApproveBtn);
@@ -471,6 +473,37 @@ describe('ContentPlanEditor Component', () => {
 
     // Plan status badge is now approved
     expect(await screen.findByText('approved')).toBeInTheDocument();
+  });
+
+  it('displays warning in approval modal when plan has only model_knowledge claims', async () => {
+    const planWithModelKnowledgeOnly: ContentPlan = {
+      ...mockPlan,
+      scenes: [
+        {
+          ...mockPlan.scenes[0],
+          claims: [
+            {
+              id: 'claim-mk-1',
+              text: 'Nuclear fusion produces clean energy.',
+              groundingStatus: 'model_knowledge',
+              groundingValid: true,
+              sourceRefs: [],
+            },
+          ],
+        },
+      ],
+    };
+    vi.mocked(plannerApi.getContentPlan).mockResolvedValueOnce(planWithModelKnowledgeOnly);
+
+    render(<ContentPlanEditor planId="plan-123" onBack={vi.fn()} />);
+
+    await screen.findByText('How Fusion Works');
+    const approveBtn = screen.getByRole('button', { name: /Approve Plan/i });
+    fireEvent.click(approveBtn);
+
+    expect(screen.getByText(/• 1 AI knowledge/i)).toBeInTheDocument();
+    expect(screen.getByText(/Warning:.*ungrounded or modified/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 AI knowledge claims/i)).toBeInTheDocument();
   });
 
   it('displays error message when approveContentPlan rejects', async () => {
