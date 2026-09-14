@@ -1,6 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import type { ContentPlan, ContentScene, ContentPlanSummary } from '../types';
-import { getContentPlan, saveContentPlanRevision, getContentPlanRevision } from '../api';
+import type {
+  ContentPlan,
+  ContentScene,
+  ContentPlanSummary,
+  RegenerationJobParams,
+} from '../types';
+import {
+  getContentPlan,
+  saveContentPlanRevision,
+  getContentPlanRevision,
+  submitContentPlanRegeneration,
+  approveContentPlan,
+  archiveContentPlan,
+} from '../api';
 import { SceneEditor } from './SceneEditor';
 import { RevisionHistory } from './RevisionHistory';
 import { Button } from '../../../shared/components/Button';
@@ -8,6 +20,7 @@ import { Button } from '../../../shared/components/Button';
 interface ContentPlanEditorProps {
   planId: string;
   onBack: () => void;
+  onOpenJobs?: (jobId?: string) => void;
   onPlanApproved?: (plan: ContentPlanSummary) => void;
   onPlanArchived?: (plan: ContentPlanSummary) => void;
 }
@@ -15,6 +28,9 @@ interface ContentPlanEditorProps {
 export const ContentPlanEditor: React.FC<ContentPlanEditorProps> = ({
   planId,
   onBack,
+  onOpenJobs,
+  onPlanApproved,
+  onPlanArchived,
 }) => {
   const [currentPlan, setCurrentPlan] = useState<ContentPlan | null>(null);
   const [draftPlan, setDraftPlan] = useState<ContentPlan | null>(null);
@@ -26,6 +42,20 @@ export const ContentPlanEditor: React.FC<ContentPlanEditorProps> = ({
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [viewingRevision, setViewingRevision] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [regenerationTarget, setRegenerationTarget] = useState<
+    | { type: 'plan' }
+    | { type: 'scene'; sceneId: string; sceneIndex: number }
+    | { type: 'narration'; sceneId: string; sceneIndex: number }
+    | null
+  >(null);
+  const [regenerationInstruction, setRegenerationInstruction] = useState('');
+  const [isSubmittingRegen, setIsSubmittingRegen] = useState(false);
+
+  const [isApprovalModalOpen, setIsApprovalModalOpen] = useState(false);
+  const [isApproving, setIsApproving] = useState(false);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
   const isReadOnly =
     (viewingRevision !== null && currentPlan !== null && viewingRevision !== currentPlan.revision) ||
@@ -119,6 +149,106 @@ export const ContentPlanEditor: React.FC<ContentPlanEditorProps> = ({
     }
   };
 
+  const handleOpenRegeneratePlan = () => {
+    if (isDirty || isReadOnly || currentPlan?.status === 'archived') return;
+    setRegenerationTarget({ type: 'plan' });
+    setRegenerationInstruction('');
+  };
+
+  const handleOpenRegenerateScene = (sceneId: string) => {
+    if (isDirty || isReadOnly || currentPlan?.status === 'archived' || !draftPlan) return;
+    const sceneIndex = draftPlan.scenes.findIndex((s) => s.id === sceneId);
+    setRegenerationTarget({ type: 'scene', sceneId, sceneIndex: sceneIndex >= 0 ? sceneIndex : 0 });
+    setRegenerationInstruction('');
+  };
+
+  const handleOpenRegenerateNarration = (sceneId: string) => {
+    if (isDirty || isReadOnly || currentPlan?.status === 'archived' || !draftPlan) return;
+    const sceneIndex = draftPlan.scenes.findIndex((s) => s.id === sceneId);
+    setRegenerationTarget({ type: 'narration', sceneId, sceneIndex: sceneIndex >= 0 ? sceneIndex : 0 });
+    setRegenerationInstruction('');
+  };
+
+  const handleSubmitRegeneration = async () => {
+    if (!currentPlan || !regenerationTarget) return;
+    setIsSubmittingRegen(true);
+    setError(null);
+    try {
+      const params: RegenerationJobParams = {
+        projectId: currentPlan.projectId,
+        planId: currentPlan.id,
+        baseRevision: currentPlan.revision,
+        operation:
+          regenerationTarget.type === 'plan'
+            ? 'regenerate_plan'
+            : regenerationTarget.type === 'scene'
+            ? 'regenerate_scene'
+            : 'regenerate_narration',
+        sceneId: regenerationTarget.type !== 'plan' ? regenerationTarget.sceneId : null,
+        userInstruction: regenerationInstruction.trim() || null,
+        planningRequest: {
+          projectId: currentPlan.projectId,
+          inputType: 'topic',
+          inputText: currentPlan.summary || currentPlan.title,
+          targetDurationMs: currentPlan.targetDurationMs,
+          language: currentPlan.language,
+          tone: currentPlan.tone,
+          sourceContext: [],
+          generationOptions: {},
+        },
+        sourceContext: [],
+      };
+      const job = await submitContentPlanRegeneration(params);
+      setActiveJobId(job.id);
+      setRegenerationTarget(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsSubmittingRegen(false);
+    }
+  };
+
+  const handleApproveClick = () => {
+    if (isDirty || isReadOnly || currentPlan?.status === 'approved' || currentPlan?.status === 'archived') return;
+    setApprovalError(null);
+    setIsApprovalModalOpen(true);
+  };
+
+  const handleConfirmApprove = async () => {
+    if (!currentPlan) return;
+    setIsApproving(true);
+    setApprovalError(null);
+    try {
+      const summary = await approveContentPlan(currentPlan.id, currentPlan.revision);
+      setCurrentPlan({
+        ...currentPlan,
+        status: 'approved',
+      });
+      setDraftPlan((prev) => (prev ? { ...prev, status: 'approved' } : null));
+      setIsApprovalModalOpen(false);
+      if (onPlanApproved) onPlanApproved(summary);
+    } catch (err) {
+      setApprovalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsApproving(false);
+    }
+  };
+
+  const handleArchive = async () => {
+    if (!currentPlan || isDirty || currentPlan.status === 'archived') return;
+    const confirmArchive = window.confirm(
+      'Are you sure you want to archive this content plan? Archived plans cannot be edited or regenerated.'
+    );
+    if (!confirmArchive) return;
+    try {
+      const summary = await archiveContentPlan(currentPlan.id, currentPlan.revision);
+      if (onPlanArchived) onPlanArchived(summary);
+      onBack();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const handleBack = () => {
     if (isDirty) {
       const discard = window.confirm('You have unsaved changes. Discard and return to plans list?');
@@ -160,6 +290,13 @@ export const ContentPlanEditor: React.FC<ContentPlanEditorProps> = ({
 
   const activeScene = draftPlan.scenes[selectedSceneIndex] || draftPlan.scenes[0];
 
+  const allClaims = currentPlan?.scenes.flatMap((s) => s.claims) || [];
+  const totalClaims = allClaims.length;
+  const supportedCount = allClaims.filter((c) => c.groundingStatus === 'supported').length;
+  const modelKnowledgeCount = allClaims.filter((c) => c.groundingStatus === 'model_knowledge').length;
+  const uncertainCount = allClaims.filter((c) => c.groundingStatus === 'uncertain').length;
+  const modifiedCount = allClaims.filter((c) => c.groundingStatus === 'modified').length;
+
   return (
     <div className="space-y-6 max-w-6xl mx-auto p-6">
       {/* Editor Header */}
@@ -186,8 +323,8 @@ export const ContentPlanEditor: React.FC<ContentPlanEditorProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="text-xs font-mono">
+        <div className="flex items-center gap-2">
+          <div className="text-xs font-mono mr-1">
             {isSaving ? (
               <span className="text-amber-400 flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
@@ -207,6 +344,40 @@ export const ContentPlanEditor: React.FC<ContentPlanEditorProps> = ({
           >
             History
           </Button>
+
+          <Button
+            variant="secondary"
+            className="text-xs"
+            disabled={isDirty || isReadOnly || draftPlan.status === 'archived'}
+            onClick={handleOpenRegeneratePlan}
+            title={isDirty ? 'Save or discard changes before regenerating' : 'Regenerate entire plan'}
+          >
+            Regenerate Plan
+          </Button>
+
+          {draftPlan.status !== 'approved' && draftPlan.status !== 'archived' && (
+            <Button
+              variant="secondary"
+              className="text-xs bg-emerald-950/60 text-emerald-300 hover:bg-emerald-900/60 border-emerald-800"
+              disabled={isDirty || isReadOnly}
+              onClick={handleApproveClick}
+              title={isDirty ? 'Save or discard changes before approving' : 'Approve plan'}
+            >
+              Approve Plan
+            </Button>
+          )}
+
+          {draftPlan.status !== 'archived' && (
+            <Button
+              variant="secondary"
+              className="text-xs text-rose-300 hover:bg-rose-950/60 border-rose-900/60"
+              disabled={isDirty}
+              onClick={handleArchive}
+              title="Archive this content plan"
+            >
+              Archive
+            </Button>
+          )}
 
           <Button
             onClick={handleSave}
@@ -262,6 +433,40 @@ export const ContentPlanEditor: React.FC<ContentPlanEditorProps> = ({
               Reload Latest Plan
             </Button>
           )}
+        </div>
+      )}
+
+      {/* Active Regeneration Job Notification */}
+      {activeJobId && (
+        <div className="p-4 rounded-xl bg-indigo-950/40 border border-indigo-800/60 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-pulse" />
+            <div>
+              <p className="text-xs font-semibold text-indigo-200">
+                Regeneration job submitted successfully!
+              </p>
+              <p className="text-[11px] font-mono text-indigo-400">
+                Job ID: <span>{activeJobId}</span>
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {onOpenJobs && (
+              <Button
+                variant="secondary"
+                className="text-xs px-3 py-1 bg-indigo-900/60 hover:bg-indigo-800 text-indigo-200 border-indigo-700"
+                onClick={() => onOpenJobs(activeJobId)}
+              >
+                View in Queue
+              </Button>
+            )}
+            <button
+              onClick={() => setActiveJobId(null)}
+              className="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 cursor-pointer"
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
 
@@ -356,6 +561,9 @@ export const ContentPlanEditor: React.FC<ContentPlanEditorProps> = ({
               scene={activeScene}
               onChange={handleSceneChange}
               isReadOnly={isReadOnly}
+              isDirty={isDirty}
+              onRegenerateScene={handleOpenRegenerateScene}
+              onRegenerateNarration={handleOpenRegenerateNarration}
             />
           ) : (
             <div className="p-6 rounded-xl bg-gray-900 border border-gray-800 space-y-4">
@@ -371,6 +579,125 @@ export const ContentPlanEditor: React.FC<ContentPlanEditorProps> = ({
           )}
         </div>
       </div>
+
+      {/* Regeneration Modal */}
+      {regenerationTarget && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-900 border border-gray-800 rounded-xl max-w-lg w-full p-6 space-y-4 shadow-2xl">
+            <h3 className="text-base font-bold text-gray-100">
+              {regenerationTarget.type === 'plan'
+                ? 'Regenerate Content Plan'
+                : regenerationTarget.type === 'scene'
+                ? `Regenerate Scene ${(regenerationTarget.sceneIndex ?? 0) + 1}`
+                : `Regenerate Narration for Scene ${(regenerationTarget.sceneIndex ?? 0) + 1}`}
+            </h3>
+            <p className="text-xs text-gray-400">
+              {regenerationTarget.type === 'plan'
+                ? `The previous content will be preserved as Revision ${currentPlan.revision}. A new draft revision will be produced by the planning worker.`
+                : regenerationTarget.type === 'scene'
+                ? `The previous content will be preserved as Revision ${currentPlan.revision}. Only Scene ${(regenerationTarget.sceneIndex ?? 0) + 1} will be updated in a new draft revision.`
+                : `The previous content will be preserved as Revision ${currentPlan.revision}. Only the voiceover narration and grounding claims for Scene ${(regenerationTarget.sceneIndex ?? 0) + 1} will be updated.`}
+            </p>
+            <div>
+              <label className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-1">
+                Regeneration Instruction (optional)
+              </label>
+              <textarea
+                rows={3}
+                value={regenerationInstruction}
+                onChange={(e) => setRegenerationInstruction(e.target.value)}
+                placeholder="Optional prompt instruction to guide changes (e.g. emphasize safety protocols, adjust pacing)..."
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:border-indigo-500 resize-none"
+              />
+            </div>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <Button
+                variant="secondary"
+                className="text-xs"
+                onClick={() => setRegenerationTarget(null)}
+                disabled={isSubmittingRegen}
+              >
+                Cancel
+              </Button>
+              <Button
+                className="text-xs"
+                onClick={handleSubmitRegeneration}
+                disabled={isSubmittingRegen}
+              >
+                {isSubmittingRegen ? 'Submitting...' : 'Submit Regeneration'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Approval Modal */}
+      {isApprovalModalOpen && currentPlan && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-900 border border-gray-800 rounded-xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <h3 className="text-base font-bold text-gray-100">
+              Approve Content Plan (Revision {currentPlan.revision})
+            </h3>
+            <p className="text-xs text-gray-400">
+              Approving this plan finalizes the current revision for downstream production.
+            </p>
+
+            {/* Metrics Breakdown */}
+            <div className="bg-gray-950 p-4 rounded-lg border border-gray-800 space-y-2 text-xs">
+              <div className="flex justify-between text-gray-300">
+                <span>Total Scenes: {currentPlan.scenes.length}</span>
+                <span>
+                  Estimated: {Math.round(currentPlan.estimatedDurationMs / 1000)}s (Target: {Math.round(currentPlan.targetDurationMs / 1000)}s)
+                </span>
+              </div>
+              <div className="border-t border-gray-800 pt-2 space-y-1">
+                <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+                  Grounding Breakdown ({totalClaims} claims)
+                </div>
+                <div className="grid grid-cols-2 gap-1 text-[11px]">
+                  <span className="text-emerald-400">• {supportedCount} supported</span>
+                  <span className="text-indigo-400">• {modelKnowledgeCount} AI knowledge</span>
+                  <span className="text-amber-400">• {uncertainCount} uncertain</span>
+                  <span className="text-rose-400">• {modifiedCount} modified</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Warning for unverified claims */}
+            {(uncertainCount > 0 || modifiedCount > 0) && (
+              <div className="p-3 bg-amber-950/50 border border-amber-800/60 rounded-lg text-amber-200 text-xs">
+                <span className="font-semibold block mb-0.5">Warning: Plan contains unverified or modified claims</span>
+                This plan contains {uncertainCount} uncertain and {modifiedCount} modified claims. Verify factual accuracy before approval.
+              </div>
+            )}
+
+            {/* Backend Approval Error */}
+            {approvalError && (
+              <div className="p-3 bg-rose-950/50 border border-rose-800/60 rounded-lg text-rose-300 text-xs">
+                {approvalError}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <Button
+                variant="secondary"
+                className="text-xs"
+                onClick={() => setIsApprovalModalOpen(false)}
+                disabled={isApproving}
+              >
+                Cancel
+              </Button>
+              <Button
+                className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white"
+                onClick={handleConfirmApprove}
+                disabled={isApproving}
+              >
+                {isApproving ? 'Approving...' : 'Confirm Approval'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

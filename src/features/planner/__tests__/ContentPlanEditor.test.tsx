@@ -2,13 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ContentPlanEditor } from '../components/ContentPlanEditor';
 import * as plannerApi from '../api';
-import type { ContentPlan, ContentPlanRevisionSummary } from '../types';
+import type { ContentPlan, ContentPlanRevisionSummary, Job } from '../types';
 
 vi.mock('../api', () => ({
   getContentPlan: vi.fn(),
   saveContentPlanRevision: vi.fn(),
   getContentPlanHistory: vi.fn(),
   getContentPlanRevision: vi.fn(),
+  submitContentPlanRegeneration: vi.fn(),
+  approveContentPlan: vi.fn(),
+  archiveContentPlan: vi.fn(),
 }));
 
 describe('ContentPlanEditor Component', () => {
@@ -102,7 +105,7 @@ describe('ContentPlanEditor Component', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(plannerApi.getContentPlan).mockResolvedValue(mockPlan);
+    vi.mocked(plannerApi.getContentPlan).mockImplementation(async () => JSON.parse(JSON.stringify(mockPlan)));
     vi.mocked(plannerApi.getContentPlanHistory).mockResolvedValue(mockHistory);
     vi.mocked(plannerApi.saveContentPlanRevision).mockImplementation(async (_id, expectedRev, plan) => ({
       ...plan,
@@ -298,5 +301,222 @@ describe('ContentPlanEditor Component', () => {
     await waitFor(() => {
       expect(plannerApi.getContentPlan).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it('blocks regeneration when dirty and submits plan regeneration job when clean', async () => {
+    const onOpenJobs = vi.fn();
+    const mockJob: Job = {
+      id: 'job-regen-101',
+      jobType: 'content.plan',
+      projectId: 'proj-1',
+      status: 'queued',
+      priority: 0,
+      idempotencyKey: null,
+      payload: '{}',
+      payloadVersion: 1,
+      result: null,
+      error: null,
+      retryCount: 0,
+      maxRetries: 3,
+      leasedBy: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      startedAt: null,
+      completedAt: null,
+      createdAt: '2026-09-12T10:00:00Z',
+      updatedAt: '2026-09-12T10:00:00Z',
+    };
+    vi.mocked(plannerApi.submitContentPlanRegeneration).mockResolvedValueOnce(mockJob);
+
+    render(<ContentPlanEditor planId="plan-123" onBack={vi.fn()} onOpenJobs={onOpenJobs} />);
+
+    await screen.findByText('How Fusion Works');
+    const regenBtn = screen.getByRole('button', { name: /Regenerate Plan/i });
+
+    // When clean, can click Regenerate Plan
+    fireEvent.click(regenBtn);
+    expect(screen.getByText(/Regenerate Content Plan/i)).toBeInTheDocument();
+    expect(screen.getByText(/preserved as Revision 1/i)).toBeInTheDocument();
+
+    const instructionInput = screen.getByPlaceholderText(/Optional prompt instruction/i);
+    fireEvent.change(instructionInput, { target: { value: 'Focus on stellarators' } });
+
+    const submitBtn = screen.getByRole('button', { name: /Submit Regeneration/i });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(plannerApi.submitContentPlanRegeneration).toHaveBeenCalledWith(
+        expect.objectContaining({
+          planId: 'plan-123',
+          baseRevision: 1,
+          operation: 'regenerate_plan',
+          userInstruction: 'Focus on stellarators',
+        })
+      );
+    });
+
+    expect(await screen.findByText(/job-regen-101/i)).toBeInTheDocument();
+    const viewQueueBtn = screen.getByRole('button', { name: /View in Queue/i });
+    fireEvent.click(viewQueueBtn);
+    expect(onOpenJobs).toHaveBeenCalledWith('job-regen-101');
+
+    // Now test dirty state blocks regeneration
+    const narrationInput = screen.getByDisplayValue('Welcome to stellar energy on Earth.');
+    fireEvent.change(narrationInput, { target: { value: 'Unsaved edit' } });
+    expect(regenBtn).toBeDisabled();
+  });
+
+  it('triggers scene and narration regeneration with target sceneId', async () => {
+    const mockJob: Job = {
+      id: 'job-regen-scene-202',
+      jobType: 'content.plan',
+      projectId: 'proj-1',
+      status: 'queued',
+      priority: 0,
+      idempotencyKey: null,
+      payload: '{}',
+      payloadVersion: 1,
+      result: null,
+      error: null,
+      retryCount: 0,
+      maxRetries: 3,
+      leasedBy: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      startedAt: null,
+      completedAt: null,
+      createdAt: '2026-09-12T10:00:00Z',
+      updatedAt: '2026-09-12T10:00:00Z',
+    };
+    vi.mocked(plannerApi.submitContentPlanRegeneration).mockResolvedValue(mockJob);
+
+    render(<ContentPlanEditor planId="plan-123" onBack={vi.fn()} />);
+
+    await screen.findByText('How Fusion Works');
+
+    // Click Regenerate Scene on scene-1
+    const regenSceneBtn = screen.getByRole('button', { name: /Regenerate Scene/i });
+    fireEvent.click(regenSceneBtn);
+
+    expect(screen.getByText(/Regenerate Scene 1/i)).toBeInTheDocument();
+    const submitBtn = screen.getByRole('button', { name: /Submit Regeneration/i });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(plannerApi.submitContentPlanRegeneration).toHaveBeenCalledWith(
+        expect.objectContaining({
+          planId: 'plan-123',
+          baseRevision: 1,
+          operation: 'regenerate_scene',
+          sceneId: 'scene-1',
+        })
+      );
+    });
+
+    // Click Regenerate Narration
+    const regenNarrationBtn = screen.getByRole('button', { name: /Regenerate Narration/i });
+    fireEvent.click(regenNarrationBtn);
+
+    expect(screen.getByText(/Regenerate Narration for Scene 1/i)).toBeInTheDocument();
+    const submitNarrationBtn = screen.getByRole('button', { name: /Submit Regeneration/i });
+    fireEvent.click(submitNarrationBtn);
+
+    await waitFor(() => {
+      expect(plannerApi.submitContentPlanRegeneration).toHaveBeenCalledWith(
+        expect.objectContaining({
+          planId: 'plan-123',
+          baseRevision: 1,
+          operation: 'regenerate_narration',
+          sceneId: 'scene-1',
+        })
+      );
+    });
+  });
+
+  it('opens approval modal with breakdown and approves plan successfully', async () => {
+    vi.mocked(plannerApi.approveContentPlan).mockResolvedValueOnce({
+      id: 'plan-123',
+      projectId: 'proj-1',
+      title: 'How Fusion Works',
+      currentRevision: 1,
+      status: 'approved',
+      approvedRevision: 1,
+      approvedAt: '2026-09-12T12:00:00Z',
+      createdAt: '2026-09-12T10:00:00Z',
+      updatedAt: '2026-09-12T12:00:00Z',
+    });
+
+    render(<ContentPlanEditor planId="plan-123" onBack={vi.fn()} />);
+
+    await screen.findByText('How Fusion Works');
+    const approveBtn = screen.getByRole('button', { name: /Approve Plan/i });
+    fireEvent.click(approveBtn);
+
+    // Approval modal displays summary metrics and warning for uncertain/modified
+    expect(screen.getByText(/Approve Content Plan \(Revision 1\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Total Scenes: 2/i)).toBeInTheDocument();
+    expect(screen.getByText(/Estimated: 30s/i)).toBeInTheDocument();
+    expect(screen.getByText(/• 1 supported/i)).toBeInTheDocument();
+    expect(screen.getByText(/• 1 AI knowledge/i)).toBeInTheDocument();
+    expect(screen.getByText(/• 1 uncertain/i)).toBeInTheDocument();
+    expect(screen.getByText(/• 1 modified/i)).toBeInTheDocument();
+    expect(screen.getByText(/Warning:.*unverified or modified/i)).toBeInTheDocument();
+
+    const confirmApproveBtn = screen.getByRole('button', { name: /Confirm Approval/i });
+    fireEvent.click(confirmApproveBtn);
+
+    await waitFor(() => {
+      expect(plannerApi.approveContentPlan).toHaveBeenCalledWith('plan-123', 1);
+    });
+
+    // Plan status badge is now approved
+    expect(await screen.findByText('approved')).toBeInTheDocument();
+  });
+
+  it('displays error message when approveContentPlan rejects', async () => {
+    vi.mocked(plannerApi.approveContentPlan).mockRejectedValueOnce(
+      new Error('plan_duration_out_of_tolerance: duration 45s exceeds tolerance')
+    );
+
+    render(<ContentPlanEditor planId="plan-123" onBack={vi.fn()} />);
+
+    await screen.findByText('How Fusion Works');
+    fireEvent.click(screen.getByRole('button', { name: /Approve Plan/i }));
+
+    const confirmApproveBtn = screen.getByRole('button', { name: /Confirm Approval/i });
+    fireEvent.click(confirmApproveBtn);
+
+    expect(await screen.findByText(/plan_duration_out_of_tolerance/i)).toBeInTheDocument();
+  });
+
+  it('archives plan after confirmation and returns to plan list', async () => {
+    const onBack = vi.fn();
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    vi.mocked(plannerApi.archiveContentPlan).mockResolvedValueOnce({
+      id: 'plan-123',
+      projectId: 'proj-1',
+      title: 'How Fusion Works',
+      currentRevision: 1,
+      status: 'archived',
+      approvedRevision: null,
+      approvedAt: null,
+      createdAt: '2026-09-12T10:00:00Z',
+      updatedAt: '2026-09-12T12:00:00Z',
+    });
+
+    render(<ContentPlanEditor planId="plan-123" onBack={onBack} />);
+
+    await screen.findByText('How Fusion Works');
+    const archiveBtn = screen.getByRole('button', { name: /Archive/i });
+    fireEvent.click(archiveBtn);
+
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(plannerApi.archiveContentPlan).toHaveBeenCalledWith('plan-123', 1);
+      expect(onBack).toHaveBeenCalled();
+    });
+
+    confirmSpy.mockRestore();
   });
 });

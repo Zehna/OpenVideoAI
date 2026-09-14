@@ -76,6 +76,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
           setSelectedPlanId(null);
           void loadPlans();
         }}
+        onOpenJobs={onOpenJobs}
       />
     );
   }

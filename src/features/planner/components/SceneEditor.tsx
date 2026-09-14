@@ -6,6 +6,9 @@ interface SceneEditorProps {
   scene: ContentScene;
   onChange: (updated: ContentScene) => void;
   isReadOnly: boolean;
+  isDirty?: boolean;
+  onRegenerateScene?: (sceneId: string) => void;
+  onRegenerateNarration?: (sceneId: string) => void;
 }
 
 const ALL_MEDIA_INTENTS: { value: MediaIntent; label: string }[] = [
@@ -21,6 +24,9 @@ export const SceneEditor: React.FC<SceneEditorProps> = ({
   scene,
   onChange,
   isReadOnly,
+  isDirty = false,
+  onRegenerateScene,
+  onRegenerateNarration,
 }) => {
   const [queriesText, setQueriesText] = React.useState(scene.stockSearchQueries.join(', '));
 
@@ -85,9 +91,22 @@ export const SceneEditor: React.FC<SceneEditorProps> = ({
       {/* Scene Header */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 border-b border-gray-800 pb-4">
         <div className="md:col-span-2">
-          <label className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-1">
-            Scene Title
-          </label>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+              Scene Title
+            </label>
+            {onRegenerateScene && (
+              <button
+                type="button"
+                disabled={isReadOnly || isDirty}
+                onClick={() => onRegenerateScene(scene.id)}
+                title={isDirty ? 'Save or discard changes before regenerating' : 'Regenerate this scene'}
+                className="text-[11px] px-2 py-0.5 rounded font-medium text-indigo-400 hover:text-indigo-300 hover:bg-indigo-950/60 border border-indigo-900/60 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
+              >
+                Regenerate Scene
+              </button>
+            )}
+          </div>
           <input
             type="text"
             disabled={isReadOnly}
@@ -113,9 +132,22 @@ export const SceneEditor: React.FC<SceneEditorProps> = ({
 
       {/* Narration */}
       <div className="space-y-1.5">
-        <label className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
-          Voiceover Narration
-        </label>
+        <div className="flex items-center justify-between">
+          <label className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+            Voiceover Narration
+          </label>
+          {onRegenerateNarration && (
+            <button
+              type="button"
+              disabled={isReadOnly || isDirty}
+              onClick={() => onRegenerateNarration(scene.id)}
+              title={isDirty ? 'Save or discard changes before regenerating' : 'Regenerate narration and citations for this scene'}
+              className="text-[11px] px-2 py-0.5 rounded font-medium text-indigo-400 hover:text-indigo-300 hover:bg-indigo-950/60 border border-indigo-900/60 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
+            >
+              Regenerate Narration
+            </button>
+          )}
+        </div>
         <textarea
           disabled={isReadOnly}
           value={scene.narration}

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { PlannerView } from '../components/PlannerView';
 import * as plannerApi from '../api';
-import type { ContentPlanSummary, PlannerProviderStatus, Job } from '../types';
+import type { ContentPlanSummary, PlannerProviderStatus, Job, ContentPlan } from '../types';
 
 vi.mock('../api', () => ({
   listProjectContentPlans: vi.fn(),
@@ -135,5 +135,34 @@ describe('PlannerView Component', () => {
     const viewQueueBtn = screen.getByRole('button', { name: /View in Queue/i });
     fireEvent.click(viewQueueBtn);
     expect(onOpenJobs).toHaveBeenCalledWith('job-plan-999');
+  });
+
+  it('opens ContentPlanEditor when plan is selected and mounts editor view', async () => {
+    const mockPlan: ContentPlan = {
+      id: 'plan-1',
+      projectId: 'proj-1',
+      revision: 2,
+      status: 'draft',
+      title: 'Explainer Video Plan',
+      summary: 'Summary text',
+      language: 'en',
+      tone: 'informative',
+      targetDurationMs: 60000,
+      estimatedDurationMs: 60000,
+      fullNarration: 'Narration text',
+      scenes: [],
+      sourceRefs: [],
+      createdAt: '2026-09-12T10:00:00Z',
+      updatedAt: '2026-09-12T11:00:00Z',
+    };
+    vi.mocked(plannerApi.getContentPlan).mockResolvedValueOnce(mockPlan);
+
+    render(<PlannerView projectId="proj-1" onBack={vi.fn()} />);
+
+    const openBtns = await screen.findAllByRole('button', { name: /Open/i });
+    fireEvent.click(openBtns[0]);
+
+    expect(await screen.findByRole('button', { name: /Save Revision/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Regenerate Plan/i })).toBeInTheDocument();
   });
 });
