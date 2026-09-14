@@ -22,6 +22,12 @@ export const SceneEditor: React.FC<SceneEditorProps> = ({
   onChange,
   isReadOnly,
 }) => {
+  const [queriesText, setQueriesText] = React.useState(scene.stockSearchQueries.join(', '));
+
+  React.useEffect(() => {
+    setQueriesText(scene.stockSearchQueries.join(', '));
+  }, [scene.id]);
+
   const handleTitleChange = (val: string) => {
     onChange({ ...scene, title: val });
   };
@@ -30,8 +36,11 @@ export const SceneEditor: React.FC<SceneEditorProps> = ({
     onChange({ ...scene, narration: val });
   };
 
-  const handleDurationChange = (sec: number) => {
-    onChange({ ...scene, durationEstimateMs: Math.max(1, sec) * 1000 });
+  const handleDurationChange = (val: string) => {
+    const sec = parseInt(val, 10);
+    if (!isNaN(sec) && sec > 0) {
+      onChange({ ...scene, durationEstimateMs: sec * 1000 });
+    }
   };
 
   const handleVisualChange = (val: string) => {
@@ -48,6 +57,7 @@ export const SceneEditor: React.FC<SceneEditorProps> = ({
   };
 
   const handleQueriesChange = (text: string) => {
+    setQueriesText(text);
     const queries = text
       .split(',')
       .map((q) => q.trim())
@@ -95,7 +105,7 @@ export const SceneEditor: React.FC<SceneEditorProps> = ({
             disabled={isReadOnly}
             min={1}
             value={Math.round(scene.durationEstimateMs / 1000)}
-            onChange={(e) => handleDurationChange(Number(e.target.value))}
+            onChange={(e) => handleDurationChange(e.target.value)}
             className="w-full px-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-gray-100 font-mono text-sm focus:outline-none focus:border-indigo-500 disabled:opacity-60"
           />
         </div>
@@ -164,8 +174,9 @@ export const SceneEditor: React.FC<SceneEditorProps> = ({
         <input
           type="text"
           disabled={isReadOnly}
-          value={scene.stockSearchQueries.join(', ')}
+          value={queriesText}
           onChange={(e) => handleQueriesChange(e.target.value)}
+          onBlur={() => setQueriesText(scene.stockSearchQueries.join(', '))}
           placeholder="e.g. tokamak interior, glowing plasma"
           className="w-full px-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-xs text-gray-200 focus:outline-none focus:border-indigo-500 disabled:opacity-60"
         />

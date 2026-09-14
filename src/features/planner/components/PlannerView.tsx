@@ -68,6 +68,18 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
     }
   };
 
+  if (selectedPlanId) {
+    return (
+      <ContentPlanEditor
+        planId={selectedPlanId}
+        onBack={() => {
+          setSelectedPlanId(null);
+          void loadPlans();
+        }}
+      />
+    );
+  }
+
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-6">
       {/* Planner Header */}
@@ -75,10 +87,10 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
         <div className="flex items-center gap-3">
           <Button
             variant="secondary"
-            onClick={selectedPlanId ? () => setSelectedPlanId(null) : isCreating ? () => setIsCreating(false) : onBack}
+            onClick={isCreating ? () => setIsCreating(false) : onBack}
             className="text-xs px-3 py-1.5"
           >
-            {selectedPlanId || isCreating ? '← Back to Plan List' : '← Back to Project'}
+            {isCreating ? '← Back to Plan List' : '← Back to Project'}
           </Button>
           <div>
             <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
@@ -164,14 +176,6 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
           providerStatus={providerStatus}
           onJobCreated={handleJobCreated}
           onCancel={() => setIsCreating(false)}
-        />
-      ) : selectedPlanId ? (
-        <ContentPlanEditor
-          planId={selectedPlanId}
-          onBack={() => {
-            setSelectedPlanId(null);
-            void loadPlans();
-          }}
         />
       ) : (
         <PlanList

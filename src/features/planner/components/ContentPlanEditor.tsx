@@ -27,7 +27,9 @@ export const ContentPlanEditor: React.FC<ContentPlanEditorProps> = ({
   const [viewingRevision, setViewingRevision] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const isReadOnly = viewingRevision !== null && currentPlan !== null && viewingRevision !== currentPlan.revision;
+  const isReadOnly =
+    (viewingRevision !== null && currentPlan !== null && viewingRevision !== currentPlan.revision) ||
+    currentPlan?.status === 'archived';
 
   const loadCurrentPlan = useCallback(async () => {
     setIsLoading(true);
@@ -234,8 +236,32 @@ export const ContentPlanEditor: React.FC<ContentPlanEditorProps> = ({
 
       {/* Error Alert */}
       {error && (
-        <div className="p-3 rounded-lg bg-rose-950/50 border border-rose-800/60 text-rose-300 text-xs">
-          {error}
+        <div className="p-3 rounded-lg bg-rose-950/50 border border-rose-800/60 text-rose-300 text-xs flex items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <span className="font-bold block">
+              {error.includes('content_plan_revision_conflict')
+                ? 'Revision Conflict'
+                : 'Error'}
+            </span>
+            <p>
+              {error.includes('content_plan_revision_conflict')
+                ? 'This plan has been updated in another session. Please reload to view and edit the latest revision.'
+                : error}
+            </p>
+          </div>
+          {error.includes('content_plan_revision_conflict') && (
+            <Button
+              variant="secondary"
+              className="text-xs px-3 py-1 bg-rose-900/60 hover:bg-rose-800 text-rose-100 border-rose-700 whitespace-nowrap"
+              onClick={() => {
+                setError(null);
+                setViewingRevision(null);
+                void loadCurrentPlan();
+              }}
+            >
+              Reload Latest Plan
+            </Button>
+          )}
         </div>
       )}
 
@@ -244,6 +270,7 @@ export const ContentPlanEditor: React.FC<ContentPlanEditorProps> = ({
         <RevisionHistory
           planId={planId}
           currentRevision={currentPlan.revision}
+          approvedRevision={currentPlan.status === 'approved' ? currentPlan.revision : null}
           selectedRevision={viewingRevision ?? currentPlan.revision}
           onSelectRevision={handleSelectRevision}
           onClose={() => setIsHistoryOpen(false)}

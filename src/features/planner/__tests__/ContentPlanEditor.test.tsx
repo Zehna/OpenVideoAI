@@ -178,7 +178,7 @@ describe('ContentPlanEditor Component', () => {
 
     fireEvent.click(saveBtn);
 
-    expect(await screen.findByText(/content_plan_revision_conflict/i)).toBeInTheDocument();
+    expect(await screen.findByText('Revision Conflict')).toBeInTheDocument();
   });
 
   it('renders read-only full narration view tab', async () => {
@@ -241,5 +241,62 @@ describe('ContentPlanEditor Component', () => {
     expect(await screen.findByText(/Viewing Historical Revision 1/i)).toBeInTheDocument();
     const saveBtn = screen.getByRole('button', { name: /Save Revision/i });
     expect(saveBtn).toBeDisabled();
+  });
+
+  it('prompts user confirmation on back navigation when dirty and respects cancel/confirm', async () => {
+    const onBack = vi.fn();
+    const confirmSpy = vi.spyOn(window, 'confirm');
+
+    render(<ContentPlanEditor planId="plan-123" onBack={onBack} />);
+
+    await screen.findByText('How Fusion Works');
+    const backBtn = screen.getByRole('button', { name: /Back/i });
+
+    // When clean, back navigates immediately without prompt
+    fireEvent.click(backBtn);
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(onBack).toHaveBeenCalledTimes(1);
+
+    // Now make it dirty
+    const narrationInput = screen.getByDisplayValue('Welcome to stellar energy on Earth.');
+    fireEvent.change(narrationInput, { target: { value: 'Modified text.' } });
+
+    // User cancels confirm
+    confirmSpy.mockReturnValueOnce(false);
+    fireEvent.click(backBtn);
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(onBack).toHaveBeenCalledTimes(1); // Not called again
+
+    // User confirms discard
+    confirmSpy.mockReturnValueOnce(true);
+    fireEvent.click(backBtn);
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
+    expect(onBack).toHaveBeenCalledTimes(2);
+
+    confirmSpy.mockRestore();
+  });
+
+  it('provides reload button upon revision conflict and refreshes latest plan', async () => {
+    vi.mocked(plannerApi.saveContentPlanRevision).mockRejectedValueOnce(
+      new Error('content_plan_revision_conflict: expected revision 1 but actual is 2')
+    );
+
+    render(<ContentPlanEditor planId="plan-123" onBack={vi.fn()} />);
+
+    await screen.findByText('How Fusion Works');
+    const narrationInput = screen.getByDisplayValue('Welcome to stellar energy on Earth.');
+    fireEvent.change(narrationInput, { target: { value: 'Draft update' } });
+
+    const saveBtn = screen.getByRole('button', { name: /Save Revision/i });
+    fireEvent.click(saveBtn);
+
+    expect(await screen.findByText('Revision Conflict')).toBeInTheDocument();
+    const reloadBtn = screen.getByRole('button', { name: /Reload Latest Plan/i });
+    expect(reloadBtn).toBeInTheDocument();
+
+    fireEvent.click(reloadBtn);
+    await waitFor(() => {
+      expect(plannerApi.getContentPlan).toHaveBeenCalledTimes(2);
+    });
   });
 });
