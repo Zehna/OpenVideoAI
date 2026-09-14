@@ -37,13 +37,23 @@ pub const DEFAULT_GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis
 /// Sanitizes error strings by redacting API keys, secret tokens, and auth headers.
 /// Also bounds error message length to avoid leaking full prompts or huge payloads.
 pub fn sanitize_error_message(msg: &str) -> String {
+    // 0. Redact active GEMINI_API_KEY if present in environment
+    let mut s0 = msg.to_string();
+    if let Ok(key) = std::env::var("GEMINI_API_KEY") {
+        let trimmed = key.trim();
+        if !trimmed.is_empty() {
+            s0 = s0.replace(trimmed, "[REDACTED]");
+        }
+    }
+
     // 1. Redact Google API key pattern (AIzaSy...)
     let re_aiza = regex::Regex::new(r"AIza[0-9A-Za-z_-]{35}").unwrap();
-    let s1 = re_aiza.replace_all(msg, "[REDACTED]");
+    let s1 = re_aiza.replace_all(&s0, "[REDACTED]");
 
     // 2. Redact key=..., secret=..., token=..., api_key=...
     let re_key =
-        regex::Regex::new(r"(?i)(key|api[-_]?key|token|secret)\s*[:=]\s*[^\s,;'\x22\}]+").unwrap();
+        regex::Regex::new(r"(?i)\b(api[-_]?key|token|secret|key)\s*[:=]\s*[^\s,;'\x22\}]+")
+            .unwrap();
     let s2 = re_key.replace_all(&s1, "$1=[REDACTED]");
 
     // 3. Redact header values like x-goog-api-key: ...
