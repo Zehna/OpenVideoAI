@@ -1,3 +1,4 @@
+pub mod commands;
 pub mod derivation;
 pub mod error;
 pub mod grounding;
@@ -11,6 +12,7 @@ pub mod service;
 pub mod validation;
 pub mod worker;
 
+pub use commands::*;
 pub use derivation::*;
 pub use error::*;
 pub use grounding::*;

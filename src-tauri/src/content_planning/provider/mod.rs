@@ -141,3 +141,58 @@ impl<T: ?Sized + AIProvider> AIProvider for Box<T> {
         (**self).regenerate_narration(input)
     }
 }
+
+/// Runtime Gemini provider that resolves configuration dynamically from the environment.
+#[derive(Debug, Default, Clone)]
+pub struct DynamicGeminiProvider;
+
+impl DynamicGeminiProvider {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl AIProvider for DynamicGeminiProvider {
+    fn name(&self) -> &'static str {
+        "gemini"
+    }
+
+    fn generate_planning_draft(
+        &self,
+        input: &ProviderRequest,
+    ) -> Result<ProviderResponse, ProviderError> {
+        let config = ProviderConfigResolver::resolve_gemini()?;
+        let provider = GeminiProvider::new(config)?;
+        provider.generate_planning_draft(input)
+    }
+
+    fn generate_content_plan(
+        &self,
+        input: &ProviderRequest,
+    ) -> Result<ProviderResponse, ProviderError> {
+        let config = ProviderConfigResolver::resolve_gemini()?;
+        let provider = GeminiProvider::new(config)?;
+        provider.generate_content_plan(input)
+    }
+
+    fn regenerate_plan(&self, input: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
+        let config = ProviderConfigResolver::resolve_gemini()?;
+        let provider = GeminiProvider::new(config)?;
+        provider.regenerate_plan(input)
+    }
+
+    fn regenerate_scene(&self, input: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
+        let config = ProviderConfigResolver::resolve_gemini()?;
+        let provider = GeminiProvider::new(config)?;
+        provider.regenerate_scene(input)
+    }
+
+    fn regenerate_narration(
+        &self,
+        input: &ProviderRequest,
+    ) -> Result<ProviderResponse, ProviderError> {
+        let config = ProviderConfigResolver::resolve_gemini()?;
+        let provider = GeminiProvider::new(config)?;
+        provider.regenerate_narration(input)
+    }
+}

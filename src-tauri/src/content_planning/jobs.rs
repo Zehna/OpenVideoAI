@@ -64,7 +64,8 @@ impl ContentPlanJobPayload {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RegenerationJobParams {
     pub project_id: String,
     pub plan_id: String,
