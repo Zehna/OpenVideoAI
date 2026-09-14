@@ -3,6 +3,7 @@ import type { ContentPlanSummary, PlannerProviderStatus, Job } from '../types';
 import { listProjectContentPlans, getPlannerProviderStatus } from '../api';
 import { PlanList } from './PlanList';
 import { NewPlanForm } from './NewPlanForm';
+import { ContentPlanEditor } from './ContentPlanEditor';
 import { Button } from '../../../shared/components/Button';
 
 interface PlannerViewProps {
@@ -165,13 +166,13 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
           onCancel={() => setIsCreating(false)}
         />
       ) : selectedPlanId ? (
-        <div className="p-8 text-center rounded-xl bg-gray-900 border border-gray-800 space-y-4">
-          <h2 className="text-lg font-bold text-gray-200">Plan Loaded: {selectedPlanId}</h2>
-          <p className="text-xs text-gray-400">Structured editor will be mounted here.</p>
-          <Button variant="secondary" onClick={() => setSelectedPlanId(null)}>
-            Back to Plan List
-          </Button>
-        </div>
+        <ContentPlanEditor
+          planId={selectedPlanId}
+          onBack={() => {
+            setSelectedPlanId(null);
+            void loadPlans();
+          }}
+        />
       ) : (
         <PlanList
           plans={plans}
