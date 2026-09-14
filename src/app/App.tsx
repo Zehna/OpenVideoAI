@@ -5,6 +5,7 @@ import { ProjectList } from "../features/projects/components/ProjectList";
 import { ProjectDetail } from "../features/projects/components/ProjectDetail";
 import { JobList } from "../features/jobs/components/JobList";
 import { EditorView } from "../components/editor/EditorView";
+import { PlannerView } from "../features/planner/components/PlannerView";
 import { listProjects, createProject } from "../features/projects/api";
 import type { Project } from "../features/projects/types";
 
@@ -13,6 +14,7 @@ export const App: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [planningProjectId, setPlanningProjectId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   const loadProjects = useCallback(async () => {
@@ -63,17 +65,41 @@ export const App: React.FC = () => {
             <button
               onClick={() => {
                 setActiveTab("projects");
+                setPlanningProjectId(null);
+                setEditingProjectId(null);
               }}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors ${
-                activeTab === "projects"
+                activeTab === "projects" && !planningProjectId
                   ? "bg-gray-800 text-indigo-300 font-semibold"
                   : "text-gray-400 hover:text-gray-200"
               }`}
             >
               Projects
             </button>
+            {(selectedProject || planningProjectId) && (
+              <button
+                onClick={() => {
+                  const id = planningProjectId || selectedProject?.id;
+                  if (id) {
+                    setActiveTab("projects");
+                    setPlanningProjectId(id);
+                    setEditingProjectId(null);
+                  }
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors ${
+                  activeTab === "projects" && planningProjectId
+                    ? "bg-gray-800 text-indigo-300 font-semibold"
+                    : "text-gray-400 hover:text-gray-200"
+                }`}
+              >
+                AI Planner
+              </button>
+            )}
             <button
-              onClick={() => setActiveTab("jobs")}
+              onClick={() => {
+                setActiveTab("jobs");
+                setPlanningProjectId(null);
+              }}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors ${
                 activeTab === "jobs"
                   ? "bg-gray-800 text-indigo-300 font-semibold"
@@ -83,7 +109,10 @@ export const App: React.FC = () => {
               Jobs & Queue
             </button>
             <button
-              onClick={() => setActiveTab("health")}
+              onClick={() => {
+                setActiveTab("health");
+                setPlanningProjectId(null);
+              }}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors ${
                 activeTab === "health"
                   ? "bg-gray-800 text-indigo-300 font-semibold"
@@ -107,6 +136,15 @@ export const App: React.FC = () => {
             projectId={editingProjectId}
             onBack={() => setEditingProjectId(null)}
           />
+        ) : planningProjectId ? (
+          <PlannerView
+            projectId={planningProjectId}
+            onBack={() => setPlanningProjectId(null)}
+            onOpenJobs={() => {
+              setActiveTab("jobs");
+              setPlanningProjectId(null);
+            }}
+          />
         ) : selectedProject ? (
           <ProjectDetail
             project={selectedProject}
@@ -116,6 +154,7 @@ export const App: React.FC = () => {
             }}
             onProjectUpdated={handleProjectUpdated}
             onOpenEditor={() => setEditingProjectId(selectedProject.id)}
+            onOpenPlanner={() => setPlanningProjectId(selectedProject.id)}
           />
         ) : (
           <ProjectList

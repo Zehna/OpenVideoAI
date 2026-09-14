@@ -13,6 +13,7 @@ interface ProjectDetailProps {
   onBack: () => void;
   onProjectUpdated: (updated: Project) => void;
   onOpenEditor?: () => void;
+  onOpenPlanner?: () => void;
 }
 
 export const ProjectDetail: React.FC<ProjectDetailProps> = ({
@@ -20,6 +21,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
   onBack,
   onProjectUpdated,
   onOpenEditor,
+  onOpenPlanner,
 }) => {
   const [name, setName] = useState(project.name);
   const [description, setDescription] = useState(project.description || '');
@@ -107,6 +109,11 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
               </span>
             )}
           </div>
+          {onOpenPlanner && (
+            <Button onClick={onOpenPlanner} variant="secondary">
+              AI Planner
+            </Button>
+          )}
           {onOpenEditor && (
             <Button onClick={onOpenEditor} variant="secondary">
               Open Timeline Editor
