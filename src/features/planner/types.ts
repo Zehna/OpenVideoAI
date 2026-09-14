@@ -1,4 +1,4 @@
-﻿import type { Job } from '../jobs/types';
+import type { Job } from '../jobs/types';
 
 export type PlanStatus = 'draft' | 'approved' | 'archived';
 
@@ -6,11 +6,11 @@ export type GroundingStatus = 'supported' | 'model_knowledge' | 'uncertain' | 'm
 
 export type MediaIntent =
   | 'stock_video'
-  | 'generated_video'
   | 'stock_image'
-  | 'generated_image'
-  | 'motion_graphics'
-  | 'text_overlay';
+  | 'ai_image'
+  | 'ai_video'
+  | 'screen_recording'
+  | 'text_graphic';
 
 export type InputType = 'topic' | 'script';
 
@@ -63,19 +63,22 @@ export interface ContentScene {
   sourceRefs: SourceRef[];
 }
 
+export interface GenerationUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  providerReportedCost?: number;
+  durationMs?: number;
+}
+
 export interface GenerationMetadata {
   provider: string;
   model: string;
   plannerProfileVersion: number;
   promptTemplateVersion: number;
-  inputHash: string;
-  contextHash: string;
   generatedAt: string;
-  usage?: {
-    promptTokens?: number;
-    responseTokens?: number;
-    totalTokens?: number;
-  };
+  usage: GenerationUsage;
+  repairedCalls?: number;
 }
 
 export interface ContentPlan {

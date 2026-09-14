@@ -87,7 +87,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
       <div className="flex items-center justify-between border-b border-gray-800 pb-4">
         <div className="flex items-center gap-3">
           <Button variant="secondary" onClick={onBack} className="text-xs px-3 py-1.5">
-            ? Back to Projects
+            ← Back to Projects
           </Button>
           <div className="text-xs font-mono text-gray-500">
             ID: <span className="text-gray-400">{project.id}</span>

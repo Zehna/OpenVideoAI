@@ -77,7 +77,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
             onClick={selectedPlanId ? () => setSelectedPlanId(null) : isCreating ? () => setIsCreating(false) : onBack}
             className="text-xs px-3 py-1.5"
           >
-            {selectedPlanId || isCreating ? '? Back to Plan List' : '? Back to Project'}
+            {selectedPlanId || isCreating ? '← Back to Plan List' : '← Back to Project'}
           </Button>
           <div>
             <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">

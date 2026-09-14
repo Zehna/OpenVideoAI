@@ -90,6 +90,10 @@ describe('ProjectDetail Component', () => {
       />
     );
 
+    await waitFor(() => {
+      expect(artifactApi.listProjectArtifacts).toHaveBeenCalledWith('proj-123');
+    });
+
     const plannerBtn = screen.getByRole('button', { name: /ai planner/i });
     expect(plannerBtn).toBeInTheDocument();
     fireEvent.click(plannerBtn);
