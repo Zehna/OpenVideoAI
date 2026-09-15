@@ -40,14 +40,14 @@ describe('PlannerView Component', () => {
   const mockConfiguredStatus: PlannerProviderStatus = {
     provider: 'gemini',
     configured: true,
-    model: 'gemini-2.5-flash',
+    model: 'gemini-3.8-flash',
     message: null,
   };
 
   const mockUnconfiguredStatus: PlannerProviderStatus = {
     provider: 'gemini',
     configured: false,
-    model: 'gemini-2.5-flash',
+    model: 'gemini-3.8-flash',
     message: 'GEMINI_API_KEY environment variable is not set.',
   };
 

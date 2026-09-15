@@ -47,6 +47,9 @@ pub enum ContentPlanningError {
     #[error("Provider unavailable: {0}")]
     ProviderUnavailable(String),
 
+    #[error("Provider model unavailable: {0}")]
+    ProviderModelUnavailable(String),
+
     #[error("Structured output invalid: {0}")]
     StructuredOutputInvalid(String),
 
@@ -76,6 +79,7 @@ impl ContentPlanningError {
             Self::ProviderRateLimited(_) => "provider_rate_limited",
             Self::ProviderTimeout(_) => "provider_timeout",
             Self::ProviderUnavailable(_) => "provider_unavailable",
+            Self::ProviderModelUnavailable(_) => "provider_model_unavailable",
             Self::StructuredOutputInvalid(_) => "structured_output_invalid",
             Self::PlanningCancelled(_) => "planning_cancelled",
             Self::StaleLease(_) => "stale_lease",

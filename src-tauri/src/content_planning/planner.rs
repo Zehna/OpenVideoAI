@@ -18,6 +18,9 @@ fn classify_provider_error(err: ProviderError) -> Result<String, ContentPlanning
     match err {
         ProviderError::AuthMissing(m) => Err(ContentPlanningError::ProviderAuthMissing(m)),
         ProviderError::AuthFailed(m) => Err(ContentPlanningError::ProviderAuthFailed(m)),
+        ProviderError::ModelUnavailable(m) => {
+            Err(ContentPlanningError::ProviderModelUnavailable(m))
+        }
         ProviderError::RateLimited(m) => Err(ContentPlanningError::ProviderRateLimited(m)),
         ProviderError::Timeout(m) => Err(ContentPlanningError::ProviderTimeout(m)),
         ProviderError::Unavailable(m) => Err(ContentPlanningError::ProviderUnavailable(m)),

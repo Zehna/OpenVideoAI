@@ -277,9 +277,10 @@ fn test_worker_regenerate_base_revision_conflict() {
     let result = worker.process_one_job(&leased_regen);
     assert!(result.is_err(), "Must fail due to base revision conflict");
 
-    // Job must be failed with allow_retry = false (DeadLetter)
+    // Job must be failed with allow_retry = false (Failed, retry_count = 0)
     let final_job = job_mgr.get_job(&regen_job.id).unwrap().unwrap();
-    assert_eq!(final_job.status, JobState::DeadLetter);
+    assert_eq!(final_job.status, JobState::Failed);
+    assert_eq!(final_job.retry_count, 0);
     assert!(
         final_job.error.as_deref().unwrap().contains("conflict"),
         "Error was: {:?}",
@@ -338,7 +339,29 @@ fn test_worker_non_retryable_auth_error() {
     assert!(result.is_err());
 
     let final_job = job_mgr.get_job(&job.id).unwrap().unwrap();
-    assert_eq!(final_job.status, JobState::DeadLetter);
+    assert_eq!(final_job.status, JobState::Failed);
+    assert_eq!(final_job.retry_count, 0);
+}
+
+#[test]
+fn test_worker_non_retryable_model_unavailable() {
+    let (_dir, _db, job_mgr, _service, _planner, worker) =
+        setup_test_context(MockOutcome::ModelUnavailable);
+    let req = sample_request("proj-1");
+    let job = submit_generate_job(&job_mgr, "proj-1", req, None, None).unwrap();
+
+    let leased_job = worker.acquire_job().unwrap().unwrap();
+    let result = worker.process_one_job(&leased_job);
+    assert!(result.is_err());
+
+    let final_job = job_mgr.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(final_job.status, JobState::Failed);
+    assert_eq!(final_job.retry_count, 0);
+    assert!(
+        final_job.error.as_deref().unwrap().contains("model"),
+        "Error was: {:?}",
+        final_job.error
+    );
 }
 
 #[tokio::test]

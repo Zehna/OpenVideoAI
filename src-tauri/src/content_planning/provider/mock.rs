@@ -109,6 +109,7 @@ pub enum MockOutcome {
     Timeout,
     AuthFailed,
     Unavailable,
+    ModelUnavailable,
 }
 
 pub struct MockProvider {
@@ -185,6 +186,9 @@ impl MockProvider {
             )),
             MockOutcome::Unavailable => Err(ProviderError::Unavailable(
                 "mock provider service unavailable".to_string(),
+            )),
+            MockOutcome::ModelUnavailable => Err(ProviderError::ModelUnavailable(
+                "mock model is not supported or retired".to_string(),
             )),
         }
     }

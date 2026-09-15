@@ -158,6 +158,10 @@ pub fn classify_http_status_and_body(status: u16, body: &str) -> Result<String, 
             let msg = extract_error_message(status, body);
             Err(ProviderError::AuthFailed(msg))
         }
+        404 => {
+            let msg = extract_error_message(status, body);
+            Err(ProviderError::ModelUnavailable(msg))
+        }
         429 => {
             let msg = extract_error_message(status, body);
             Err(ProviderError::RateLimited(msg))
@@ -171,12 +175,33 @@ pub fn classify_http_status_and_body(status: u16, body: &str) -> Result<String, 
             Err(ProviderError::Unavailable(msg))
         }
         400 => {
-            let msg = extract_error_message(status, body);
-            Err(ProviderError::StructuredOutputInvalid(msg))
+            let lower = body.to_lowercase();
+            if lower.contains("api key not valid") || lower.contains("api_key_invalid") {
+                let msg = extract_error_message(status, body);
+                Err(ProviderError::AuthFailed(msg))
+            } else if lower.contains("not found")
+                || lower.contains("not supported")
+                || lower.contains("is no longer available")
+            {
+                let msg = extract_error_message(status, body);
+                Err(ProviderError::ModelUnavailable(msg))
+            } else {
+                let msg = extract_error_message(status, body);
+                Err(ProviderError::StructuredOutputInvalid(msg))
+            }
         }
         other => {
-            let msg = extract_error_message(other, body);
-            Err(ProviderError::Transport(msg))
+            let lower = body.to_lowercase();
+            if lower.contains("not found")
+                || lower.contains("not supported")
+                || lower.contains("is no longer available")
+            {
+                let msg = extract_error_message(other, body);
+                Err(ProviderError::ModelUnavailable(msg))
+            } else {
+                let msg = extract_error_message(other, body);
+                Err(ProviderError::Transport(msg))
+            }
         }
     }
 }

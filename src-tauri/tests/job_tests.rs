@@ -278,3 +278,44 @@ fn test_job_cancellation() {
     let lease = JobRepository::acquire_lease(&conn, "worker-1", 10).unwrap();
     assert!(lease.is_none());
 }
+
+#[test]
+fn test_job_fail_non_retryable_sets_failed_status() {
+    let (_dir, db) = setup_test_db();
+    let conn = db.conn().unwrap();
+
+    let job = JobRepository::enqueue(
+        &conn,
+        JobSubmission {
+            job_type: "terminal_fail_task".to_string(),
+            payload: "{}".to_string(),
+            payload_version: None,
+            priority: Some(0),
+            idempotency_key: None,
+            project_id: None,
+            max_retries: Some(3),
+        },
+    )
+    .unwrap();
+
+    // Acquire lease so job is running
+    let _ = JobRepository::acquire_lease(&conn, "worker-1", 10).unwrap();
+
+    // Fail job with allow_retry = false
+    let failed = JobRepository::fail_job(
+        &conn,
+        &job.id,
+        "Non-retryable: Model not supported or auth missing",
+        false,
+    )
+    .unwrap();
+
+    // Must transition to Failed, NOT DeadLetter!
+    assert_eq!(failed.status, JobState::Failed);
+    // Retry count must NOT be incremented (stays 0)
+    assert_eq!(failed.retry_count, 0);
+    assert!(failed.leased_by.is_none());
+    assert!(failed.lease_token.is_none());
+    assert!(failed.lease_expires_at.is_none());
+    assert!(failed.completed_at.is_some());
+}

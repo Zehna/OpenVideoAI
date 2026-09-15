@@ -56,7 +56,7 @@ fn test_provider_config_status_no_secret_leak() {
     let status_unconfigured = ProviderConfigResolver::get_status();
     assert_eq!(status_unconfigured.provider, "gemini");
     assert!(!status_unconfigured.configured);
-    assert_eq!(status_unconfigured.model, "gemini-2.5-flash");
+    assert_eq!(status_unconfigured.model, "gemini-3.8-flash");
 
     // 2. Set secret key
     let secret = "test-secret-key-xyz-98765";
@@ -65,7 +65,7 @@ fn test_provider_config_status_no_secret_leak() {
     let status_configured = ProviderConfigResolver::get_status();
     assert_eq!(status_configured.provider, "gemini");
     assert!(status_configured.configured);
-    assert_eq!(status_configured.model, "gemini-2.5-flash");
+    assert_eq!(status_configured.model, "gemini-3.8-flash");
 
     // Check serialization does NOT contain secret
     let json = serde_json::to_string(&status_configured).expect("must serialize");
@@ -78,7 +78,7 @@ fn test_provider_config_status_no_secret_leak() {
     // Also verify resolve_gemini returns runtime config with secret and default model
     let runtime_config = ProviderConfigResolver::resolve_gemini().expect("must resolve");
     assert_eq!(runtime_config.api_key, secret);
-    assert_eq!(runtime_config.model, "gemini-2.5-flash");
+    assert_eq!(runtime_config.model, "gemini-3.8-flash");
 
     // Restore
     if let Some(val) = prev {
@@ -774,17 +774,43 @@ fn test_gemini_error_sanitization() {
 }
 
 #[test]
+fn test_gemini_classify_http_model_unavailable() {
+    // 1. Status 404 model not found / not supported
+    let body_404 = r#"{"error": {"code": 404, "message": "models/gemini-2.5-flash is not found for API version v1beta, or is not supported for generateContent", "status": "NOT_FOUND"}}"#;
+    let err_404 = classify_http_status_and_body(404, body_404).unwrap_err();
+    assert!(matches!(err_404, ProviderError::ModelUnavailable(_)));
+    assert!(err_404.to_string().contains("not found"));
+
+    let cp_err = err_404.to_content_planning_error();
+    assert_eq!(cp_err.code(), "provider_model_unavailable");
+    assert!(matches!(
+        cp_err,
+        ContentPlanningError::ProviderModelUnavailable(_)
+    ));
+
+    // 2. Status 400 with model retirement message
+    let body_400_model = r#"{"error": {"code": 400, "message": "The requested model is no longer available to new users.", "status": "INVALID_ARGUMENT"}}"#;
+    let err_400_model = classify_http_status_and_body(400, body_400_model).unwrap_err();
+    assert!(matches!(err_400_model, ProviderError::ModelUnavailable(_)));
+
+    // 3. Status 400 with API key invalid maps to AuthFailed, not StructuredOutputInvalid
+    let body_key_invalid = r#"{"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.", "status": "INVALID_ARGUMENT"}}"#;
+    let err_key = classify_http_status_and_body(400, body_key_invalid).unwrap_err();
+    assert!(matches!(err_key, ProviderError::AuthFailed(_)));
+}
+
+#[test]
 fn test_gemini_provider_construction() {
     let empty_config = GeminiRuntimeConfig {
         api_key: "".to_string(),
-        model: "gemini-2.5-flash".to_string(),
+        model: "gemini-3.8-flash".to_string(),
     };
     let err = GeminiProvider::new(empty_config).unwrap_err();
     assert!(matches!(err, ProviderError::AuthMissing(_)));
 
     let valid_config = GeminiRuntimeConfig {
         api_key: "valid-test-key".to_string(),
-        model: "gemini-2.5-flash".to_string(),
+        model: "gemini-3.8-flash".to_string(),
     };
     let provider = GeminiProvider::with_base_url(
         valid_config,

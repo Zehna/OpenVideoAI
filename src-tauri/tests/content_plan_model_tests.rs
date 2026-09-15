@@ -121,7 +121,7 @@ fn create_valid_plan() -> ContentPlan {
         ],
         generation_metadata: Some(GenerationMetadata {
             provider: "gemini".to_string(),
-            model: "gemini-2.5-flash".to_string(),
+            model: "gemini-3.8-flash".to_string(),
             planner_profile_version: 1,
             prompt_template_version: 1,
             generated_at: "2026-09-12T10:00:00Z".to_string(),
@@ -318,7 +318,7 @@ fn test_summary_and_provider_status_serialization() {
     let provider_status = PlannerProviderStatus {
         provider: "gemini".to_string(),
         configured: true,
-        model: "gemini-2.5-flash".to_string(),
+        model: "gemini-3.8-flash".to_string(),
     };
     let prov_json = serde_json::to_value(&provider_status).unwrap();
     assert_eq!(prov_json["configured"], true);

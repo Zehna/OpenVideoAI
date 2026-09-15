@@ -36,6 +36,8 @@ pub enum ProviderError {
     Timeout(String),
     #[error("provider unavailable: {0}")]
     Unavailable(String),
+    #[error("provider model unavailable: {0}")]
+    ModelUnavailable(String),
     #[error("structured output invalid: {0}")]
     StructuredOutputInvalid(String),
     #[error("provider transport error: {0}")]
@@ -50,6 +52,9 @@ impl ProviderError {
             ProviderError::RateLimited(m) => ContentPlanningError::ProviderRateLimited(m.clone()),
             ProviderError::Timeout(m) => ContentPlanningError::ProviderTimeout(m.clone()),
             ProviderError::Unavailable(m) => ContentPlanningError::ProviderUnavailable(m.clone()),
+            ProviderError::ModelUnavailable(m) => {
+                ContentPlanningError::ProviderModelUnavailable(m.clone())
+            }
             ProviderError::StructuredOutputInvalid(m) => {
                 ContentPlanningError::StructuredOutputInvalid(m.clone())
             }
