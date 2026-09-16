@@ -110,6 +110,7 @@ pub enum MockOutcome {
     AuthFailed,
     Unavailable,
     ModelUnavailable,
+    TransientUnavailableOnce,
 }
 
 pub struct MockProvider {
@@ -190,6 +191,15 @@ impl MockProvider {
             MockOutcome::ModelUnavailable => Err(ProviderError::ModelUnavailable(
                 "mock model is not supported or retired".to_string(),
             )),
+            MockOutcome::TransientUnavailableOnce => {
+                if self.call_count.load(Ordering::SeqCst) <= 1 {
+                    Err(ProviderError::Unavailable(
+                        "mock 503 high demand (transient)".to_string(),
+                    ))
+                } else {
+                    Ok(self.build_response(valid_text))
+                }
+            }
         }
     }
 

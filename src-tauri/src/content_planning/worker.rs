@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -31,12 +32,84 @@ pub const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 pub const DEFAULT_CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(500);
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
+pub const BASE_RETRY_BACKOFF_MS: u64 = 2000;
+pub const MAX_RETRY_BACKOFF_MS: u64 = 10000;
+
+pub trait RetrySleeper: Send + Sync {
+    fn sleep(&self, duration: Duration);
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RealRetrySleeper;
+
+impl RetrySleeper for RealRetrySleeper {
+    fn sleep(&self, duration: Duration) {
+        std::thread::sleep(duration);
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NoopRetrySleeper;
+
+impl RetrySleeper for NoopRetrySleeper {
+    fn sleep(&self, _duration: Duration) {}
+}
+
+#[derive(Debug, Default)]
+pub struct RecordingRetrySleeper {
+    pub sleeps: std::sync::Mutex<Vec<Duration>>,
+}
+
+impl RecordingRetrySleeper {
+    pub fn new() -> Self {
+        Self {
+            sleeps: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn recorded_sleeps(&self) -> Vec<Duration> {
+        self.sleeps.lock().unwrap().clone()
+    }
+
+    pub fn total_slept(&self) -> Duration {
+        self.sleeps.lock().unwrap().iter().sum()
+    }
+}
+
+impl RetrySleeper for RecordingRetrySleeper {
+    fn sleep(&self, duration: Duration) {
+        self.sleeps.lock().unwrap().push(duration);
+    }
+}
+
+pub fn calculate_retry_backoff(job_id: &str, retry_count: i64) -> Duration {
+    if retry_count <= 0 {
+        return Duration::ZERO;
+    }
+
+    let exponent = (retry_count - 1).min(2) as u32;
+    let base_ms = BASE_RETRY_BACKOFF_MS.saturating_mul(1 << exponent);
+    let jitter_window = base_ms / 4;
+
+    let mut hasher = Sha256::new();
+    hasher.update(job_id.as_bytes());
+    hasher.update(b":");
+    hasher.update(retry_count.to_string().as_bytes());
+    let hash = hasher.finalize();
+    let seed = u64::from_be_bytes(hash[0..8].try_into().unwrap());
+    let jitter = seed % (jitter_window + 1);
+
+    let total_ms = (base_ms + jitter).min(MAX_RETRY_BACKOFF_MS);
+    Duration::from_millis(total_ms)
+}
+
 pub struct LocalContentPlanWorker<P: AIProvider + 'static = Arc<dyn AIProvider>> {
     pub worker_id: String,
     pub job_manager: Arc<JobManager>,
     pub planner: Arc<ContentPlanner<P>>,
     pub plan_service: Arc<ContentPlanService>,
     pub heartbeat_interval: Duration,
+    pub sleeper: Arc<dyn RetrySleeper>,
 }
 
 impl<P: AIProvider + 'static> LocalContentPlanWorker<P> {
@@ -52,11 +125,17 @@ impl<P: AIProvider + 'static> LocalContentPlanWorker<P> {
             planner,
             plan_service,
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
+            sleeper: Arc::new(RealRetrySleeper),
         }
     }
 
     pub fn with_heartbeat_interval(mut self, interval: Duration) -> Self {
         self.heartbeat_interval = interval;
+        self
+    }
+
+    pub fn with_sleeper(mut self, sleeper: Arc<dyn RetrySleeper>) -> Self {
+        self.sleeper = sleeper;
         self
     }
 
@@ -99,6 +178,34 @@ impl<P: AIProvider + 'static> LocalContentPlanWorker<P> {
                 "Job {} lease token mismatch (lost lease fence)",
                 job.id
             )));
+        }
+
+        Ok(())
+    }
+
+    /// Waits with bounded exponential backoff and deterministic jitter on retries.
+    /// Checks cancellation and lease fence in <= 500ms chunks.
+    fn wait_for_retry_backoff(&self, job: &Job) -> Result<(), ContentPlanningError> {
+        let total_delay = calculate_retry_backoff(&job.id, job.retry_count as i64);
+        if total_delay.is_zero() {
+            return Ok(());
+        }
+
+        tracing::info!(
+            job_id = %job.id,
+            retry_count = job.retry_count,
+            delay_ms = total_delay.as_millis(),
+            "Delaying retryable content planning job"
+        );
+
+        let chunk_size = Duration::from_millis(500);
+        let mut remaining = total_delay;
+
+        while remaining > Duration::ZERO {
+            let chunk = remaining.min(chunk_size);
+            self.sleeper.sleep(chunk);
+            remaining = remaining.saturating_sub(chunk);
+            self.ensure_fenced_and_active(job)?;
         }
 
         Ok(())
@@ -196,6 +303,10 @@ impl<P: AIProvider + 'static> LocalContentPlanWorker<P> {
 
     fn process_one_job_inner(&self, job: &Job) -> Result<ContentPlan, ContentPlanningError> {
         self.ensure_fenced_and_active(job)?;
+
+        if job.retry_count > 0 {
+            self.wait_for_retry_backoff(job)?;
+        }
 
         let payload: ContentPlanJobPayload = serde_json::from_str(&job.payload)
             .map_err(|e| ContentPlanningError::InvalidPlanningRequest(e.to_string()))?;

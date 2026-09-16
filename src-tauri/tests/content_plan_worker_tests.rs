@@ -16,7 +16,8 @@ use openvideoai_lib::content_planning::provider::{
 };
 use openvideoai_lib::content_planning::service::ContentPlanService;
 use openvideoai_lib::content_planning::worker::{
-    start_local_content_plan_worker, LocalContentPlanWorker,
+    calculate_retry_backoff, start_local_content_plan_worker, LocalContentPlanWorker,
+    RecordingRetrySleeper, RetrySleeper,
 };
 use openvideoai_lib::db::DbManager;
 use openvideoai_lib::events::bus::EventBus;
@@ -709,4 +710,391 @@ fn test_worker_heartbeat_maintains_lease_during_long_execution() {
 
     let plans = plan_service.list_project_plans("proj-1", false).unwrap();
     assert_eq!(plans.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: 503 Retry Backoff & Jitter Tests (A to H)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_backoff_function_properties() {
+    // retry_count <= 0 -> Duration::ZERO
+    assert_eq!(calculate_retry_backoff("job-1", 0), Duration::ZERO);
+    assert_eq!(calculate_retry_backoff("job-1", -1), Duration::ZERO);
+
+    // retry_count == 1 -> >= 2000ms and <= 2500ms
+    let d1 = calculate_retry_backoff("job-1", 1);
+    assert!(
+        d1 >= Duration::from_millis(2000) && d1 <= Duration::from_millis(2500),
+        "retry 1 delay out of range: {:?}",
+        d1
+    );
+
+    // retry_count == 2 -> >= 4000ms and <= 5000ms
+    let d2 = calculate_retry_backoff("job-1", 2);
+    assert!(
+        d2 >= Duration::from_millis(4000) && d2 <= Duration::from_millis(5000),
+        "retry 2 delay out of range: {:?}",
+        d2
+    );
+
+    // retry_count == 3 -> >= 8000ms and <= 10000ms
+    let d3 = calculate_retry_backoff("job-1", 3);
+    assert!(
+        d3 >= Duration::from_millis(8000) && d3 <= Duration::from_millis(10000),
+        "retry 3 delay out of range: {:?}",
+        d3
+    );
+
+    // retry_count > 3 -> never exceeds configured cap (10000ms)
+    let d4 = calculate_retry_backoff("job-1", 4);
+    assert!(
+        d4 <= Duration::from_millis(10000),
+        "retry 4 delay exceeds cap: {:?}",
+        d4
+    );
+    assert!(d4 >= Duration::from_millis(8000));
+
+    let d10 = calculate_retry_backoff("job-1", 10);
+    assert!(
+        d10 <= Duration::from_millis(10000),
+        "retry 10 delay exceeds cap: {:?}",
+        d10
+    );
+
+    // Deterministic: same job ID + retry count produces identical duration
+    assert_eq!(
+        calculate_retry_backoff("job-deterministic", 1),
+        calculate_retry_backoff("job-deterministic", 1)
+    );
+    assert_eq!(
+        calculate_retry_backoff("job-deterministic", 2),
+        calculate_retry_backoff("job-deterministic", 2)
+    );
+}
+
+#[test]
+fn test_worker_first_attempt_has_zero_backoff() {
+    let (_dir, _db, job_mgr, plan_service, planner, _worker) =
+        setup_test_context(MockOutcome::Success);
+    let sleeper = Arc::new(RecordingRetrySleeper::new());
+    let worker = LocalContentPlanWorker::new(
+        "worker-test-b".to_string(),
+        job_mgr.clone(),
+        planner,
+        plan_service,
+    )
+    .with_sleeper(sleeper.clone());
+
+    let req = sample_request("proj-1");
+    let job = submit_generate_job(&job_mgr, "proj-1", req, None, None).unwrap();
+    assert_eq!(job.retry_count, 0);
+
+    let leased_job = worker.acquire_job().unwrap().unwrap();
+    let result = worker.process_one_job(&leased_job);
+    assert!(result.is_ok());
+
+    // First attempt must NOT sleep
+    assert_eq!(sleeper.total_slept(), Duration::ZERO);
+}
+
+#[test]
+fn test_worker_transient_503_retries_with_backoff_and_succeeds() {
+    let (_dir, _db, job_mgr, plan_service, _planner, _worker) =
+        setup_test_context(MockOutcome::Success);
+
+    // Mock outcome: 503 once, then succeeds on call 2
+    let mock_provider = Arc::new(MockProvider::new(MockOutcome::TransientUnavailableOnce));
+    let planner = Arc::new(ContentPlanner::new(mock_provider));
+    let sleeper = Arc::new(RecordingRetrySleeper::new());
+    let worker = LocalContentPlanWorker::new(
+        "worker-test-c".to_string(),
+        job_mgr.clone(),
+        planner,
+        plan_service.clone(),
+    )
+    .with_sleeper(sleeper.clone());
+
+    let req = sample_request("proj-1");
+    let job = submit_generate_job(&job_mgr, "proj-1", req, None, None).unwrap();
+
+    // 1. First attempt: provider returns 503
+    let leased_1 = worker.acquire_job().unwrap().unwrap();
+    assert_eq!(leased_1.retry_count, 0);
+    let res1 = worker.process_one_job(&leased_1);
+    assert!(res1.is_err(), "First attempt must fail with 503");
+
+    // Job transitions to retryable with retry_count = 1
+    let j1 = job_mgr.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(j1.status, JobState::Retryable);
+    assert_eq!(j1.retry_count, 1);
+    assert_eq!(
+        sleeper.total_slept(),
+        Duration::ZERO,
+        "First attempt had no delay"
+    );
+
+    // 2. Second attempt (retry 1): provider will succeed, but worker must observe backoff first
+    let leased_2 = worker.acquire_job().unwrap().unwrap();
+    assert_eq!(leased_2.retry_count, 1);
+    let res2 = worker.process_one_job(&leased_2);
+    assert!(res2.is_ok(), "Second attempt must succeed: {:?}", res2);
+
+    // Job transitions to completed with retry_count = 1
+    let j2 = job_mgr.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(j2.status, JobState::Completed);
+    assert_eq!(j2.retry_count, 1);
+
+    // Sleeper recorded backoff delay for retry 1 (between 2000ms and 2500ms)
+    let slept = sleeper.total_slept();
+    assert!(
+        slept >= Duration::from_millis(2000) && slept <= Duration::from_millis(2500),
+        "Second attempt slept out of expected retry 1 backoff range: {:?}",
+        slept
+    );
+
+    // Content plan exists and revision is 1
+    let plans = plan_service.list_project_plans("proj-1", false).unwrap();
+    assert_eq!(plans.len(), 1);
+}
+
+#[test]
+fn test_worker_repeated_transient_503_increases_backoff_delays() {
+    let (_dir, _db, job_mgr, plan_service, _planner, _worker) =
+        setup_test_context(MockOutcome::Unavailable);
+
+    let mock_provider = Arc::new(MockProvider::new(MockOutcome::Unavailable));
+    let planner = Arc::new(ContentPlanner::new(mock_provider));
+    let sleeper = Arc::new(RecordingRetrySleeper::new());
+    let worker = LocalContentPlanWorker::new(
+        "worker-test-d".to_string(),
+        job_mgr.clone(),
+        planner,
+        plan_service,
+    )
+    .with_sleeper(sleeper.clone());
+
+    let req = sample_request("proj-1");
+    let job = submit_generate_job(&job_mgr, "proj-1", req, None, None).unwrap();
+
+    // Attempt 1 (retry_count 0): fails -> retry_count becomes 1
+    let l1 = worker.acquire_job().unwrap().unwrap();
+    let _ = worker.process_one_job(&l1);
+    let j1 = job_mgr.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(j1.status, JobState::Retryable);
+    assert_eq!(j1.retry_count, 1);
+    let s1 = sleeper.total_slept();
+    assert_eq!(s1, Duration::ZERO);
+
+    // Attempt 2 (retry_count 1): fails -> retry_count becomes 2
+    let l2 = worker.acquire_job().unwrap().unwrap();
+    let _ = worker.process_one_job(&l2);
+    let j2 = job_mgr.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(j2.status, JobState::Retryable);
+    assert_eq!(j2.retry_count, 2);
+    let s2 = sleeper.total_slept();
+    assert!(s2 >= Duration::from_millis(2000) && s2 <= Duration::from_millis(2500));
+
+    // Attempt 3 (retry_count 2): fails -> retry_count becomes 3
+    let l3 = worker.acquire_job().unwrap().unwrap();
+    let _ = worker.process_one_job(&l3);
+    let j3 = job_mgr.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(j3.status, JobState::Retryable);
+    assert_eq!(j3.retry_count, 3);
+    let s3 = sleeper.total_slept() - s2;
+    assert!(s3 >= Duration::from_millis(4000) && s3 <= Duration::from_millis(5000));
+    assert!(s3 > s2, "Retry 2 delay must be greater than Retry 1 delay");
+
+    // Attempt 4 (retry_count 3 == max_retries): fails -> status becomes dead_letter
+    let l4 = worker.acquire_job().unwrap().unwrap();
+    let _ = worker.process_one_job(&l4);
+    let j4 = job_mgr.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(j4.status, JobState::DeadLetter);
+    let s4 = sleeper.total_slept() - s2 - s3;
+    assert!(s4 >= Duration::from_millis(8000) && s4 <= Duration::from_millis(10000));
+    assert!(s4 > s3, "Retry 3 delay must be greater than Retry 2 delay");
+}
+
+#[test]
+fn test_worker_auth_error_no_backoff_and_fails_immediately() {
+    let (_dir, _db, job_mgr, plan_service, _planner, _worker) =
+        setup_test_context(MockOutcome::AuthFailed);
+
+    let mock_provider = Arc::new(MockProvider::new(MockOutcome::AuthFailed));
+    let planner = Arc::new(ContentPlanner::new(mock_provider));
+    let sleeper = Arc::new(RecordingRetrySleeper::new());
+    let worker = LocalContentPlanWorker::new(
+        "worker-test-e".to_string(),
+        job_mgr.clone(),
+        planner,
+        plan_service,
+    )
+    .with_sleeper(sleeper.clone());
+
+    let req = sample_request("proj-1");
+    let job = submit_generate_job(&job_mgr, "proj-1", req, None, None).unwrap();
+
+    let l = worker.acquire_job().unwrap().unwrap();
+    let res = worker.process_one_job(&l);
+    assert!(res.is_err());
+
+    let final_job = job_mgr.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(final_job.status, JobState::Failed);
+    assert_eq!(final_job.retry_count, 0);
+    assert_eq!(sleeper.total_slept(), Duration::ZERO);
+}
+
+#[test]
+fn test_worker_model_unavailable_no_backoff_and_fails_immediately() {
+    let (_dir, _db, job_mgr, plan_service, _planner, _worker) =
+        setup_test_context(MockOutcome::ModelUnavailable);
+
+    let mock_provider = Arc::new(MockProvider::new(MockOutcome::ModelUnavailable));
+    let planner = Arc::new(ContentPlanner::new(mock_provider));
+    let sleeper = Arc::new(RecordingRetrySleeper::new());
+    let worker = LocalContentPlanWorker::new(
+        "worker-test-f".to_string(),
+        job_mgr.clone(),
+        planner,
+        plan_service,
+    )
+    .with_sleeper(sleeper.clone());
+
+    let req = sample_request("proj-1");
+    let job = submit_generate_job(&job_mgr, "proj-1", req, None, None).unwrap();
+
+    let l = worker.acquire_job().unwrap().unwrap();
+    let res = worker.process_one_job(&l);
+    assert!(res.is_err());
+
+    let final_job = job_mgr.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(final_job.status, JobState::Failed);
+    assert_eq!(final_job.retry_count, 0);
+    assert_eq!(sleeper.total_slept(), Duration::ZERO);
+}
+
+struct CancellingSleeper {
+    job_mgr: Arc<JobManager>,
+    job_id: String,
+}
+impl RetrySleeper for CancellingSleeper {
+    fn sleep(&self, _duration: Duration) {
+        let _ = self.job_mgr.cancel_job(&self.job_id);
+    }
+}
+
+#[test]
+fn test_worker_cancellation_during_backoff_prevents_provider_call() {
+    let (_dir, db, job_mgr, plan_service, _planner, _worker) =
+        setup_test_context(MockOutcome::Success);
+
+    let mock_provider = Arc::new(MockProvider::new(MockOutcome::Success));
+    let planner = Arc::new(ContentPlanner::new(mock_provider.clone()));
+
+    let req = sample_request("proj-1");
+    let job = submit_generate_job(&job_mgr, "proj-1", req, None, None).unwrap();
+
+    // Simulate job already on retry_count = 1
+    {
+        let conn = db.conn().unwrap();
+        conn.execute(
+            "UPDATE jobs SET status = 'retryable', retry_count = 1 WHERE id = ?1",
+            rusqlite::params![job.id],
+        )
+        .unwrap();
+    }
+
+    let sleeper = Arc::new(CancellingSleeper {
+        job_mgr: job_mgr.clone(),
+        job_id: job.id.clone(),
+    });
+
+    let worker = LocalContentPlanWorker::new(
+        "worker-test-g".to_string(),
+        job_mgr.clone(),
+        planner,
+        plan_service.clone(),
+    )
+    .with_sleeper(sleeper);
+
+    let l = worker.acquire_job().unwrap().unwrap();
+    assert_eq!(l.retry_count, 1);
+    let res = worker.process_one_job(&l);
+    assert!(res.is_err());
+
+    // Provider call count must be 0 (provider was never invoked!)
+    assert_eq!(mock_provider.call_count(), 0);
+
+    // Job status must remain Cancelled (not overwritten)
+    let final_job = job_mgr.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(final_job.status, JobState::Cancelled);
+
+    // Zero plans published
+    let plans = plan_service.list_project_plans("proj-1", false).unwrap();
+    assert_eq!(plans.len(), 0);
+}
+
+struct StealingLeaseSleeper {
+    db: Arc<DbManager>,
+    job_id: String,
+}
+impl RetrySleeper for StealingLeaseSleeper {
+    fn sleep(&self, _duration: Duration) {
+        let conn = self.db.conn().unwrap();
+        conn.execute(
+            "UPDATE jobs SET lease_token = 'stolen-token-xyz' WHERE id = ?1",
+            rusqlite::params![self.job_id],
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn test_worker_stale_lease_during_backoff_aborts_safely() {
+    let (_dir, db, job_mgr, plan_service, _planner, _worker) =
+        setup_test_context(MockOutcome::Success);
+
+    let mock_provider = Arc::new(MockProvider::new(MockOutcome::Success));
+    let planner = Arc::new(ContentPlanner::new(mock_provider.clone()));
+
+    let req = sample_request("proj-1");
+    let job = submit_generate_job(&job_mgr, "proj-1", req, None, None).unwrap();
+
+    // Simulate job on retry_count = 1
+    {
+        let conn = db.conn().unwrap();
+        conn.execute(
+            "UPDATE jobs SET status = 'retryable', retry_count = 1 WHERE id = ?1",
+            rusqlite::params![job.id],
+        )
+        .unwrap();
+    }
+
+    let sleeper = Arc::new(StealingLeaseSleeper {
+        db: db.clone(),
+        job_id: job.id.clone(),
+    });
+
+    let worker = LocalContentPlanWorker::new(
+        "worker-test-h".to_string(),
+        job_mgr.clone(),
+        planner,
+        plan_service.clone(),
+    )
+    .with_sleeper(sleeper);
+
+    let l = worker.acquire_job().unwrap().unwrap();
+    assert_eq!(l.retry_count, 1);
+    let res = worker.process_one_job(&l);
+    assert!(
+        res.is_err(),
+        "Worker must abort when lease is stolen during backoff"
+    );
+
+    // Provider call count must be 0
+    assert_eq!(mock_provider.call_count(), 0);
+
+    // Zero plans published
+    let plans = plan_service.list_project_plans("proj-1", false).unwrap();
+    assert_eq!(plans.len(), 0);
 }
