@@ -103,7 +103,80 @@ pub fn calculate_retry_backoff(job_id: &str, retry_count: i64) -> Duration {
     Duration::from_millis(total_ms)
 }
 
-pub struct LocalContentPlanWorker<P: AIProvider + 'static = Arc<dyn AIProvider>> {
+use crate::content_planning::provider::{FALLBACK_GEMINI_MODEL, PRIMARY_GEMINI_MODEL};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeminiModelRoute {
+    Primary,
+    Fallback,
+}
+
+impl GeminiModelRoute {
+    pub fn model_name(&self) -> &'static str {
+        match self {
+            Self::Primary => PRIMARY_GEMINI_MODEL,
+            Self::Fallback => FALLBACK_GEMINI_MODEL,
+        }
+    }
+
+    pub fn is_fallback(&self) -> bool {
+        matches!(self, Self::Fallback)
+    }
+}
+
+pub fn extract_error_code(error: Option<&str>) -> Option<&str> {
+    let err = error?.trim();
+    if err.is_empty() {
+        return None;
+    }
+    if let Some((code, _)) = err.split_once(':') {
+        let trimmed = code.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+    Some(err)
+}
+
+pub fn is_transient_capacity_error(code: &str) -> bool {
+    let normalized = code.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "provider_unavailable"
+            | "provider_rate_limited"
+            | "provider_timeout"
+            | "transient_unavailable"
+    )
+}
+
+pub fn select_model_for_attempt(
+    retry_count: i32,
+    max_retries: i32,
+    previous_error_code: Option<&str>,
+) -> GeminiModelRoute {
+    // Pure model routing decision:
+    // Only route to Fallback when:
+    // 1. We are on the final eligible attempt: retry_count >= max_retries
+    //    (e.g., retry_count == 3 when max_retries == 3).
+    // 2. The previous error was a transient capacity error (503 / 429 / 408).
+    // All initial attempts (retry_count == 0) and intermediate retries (retry_count < max_retries)
+    // use Primary.
+    if retry_count <= 0 || retry_count < max_retries {
+        return GeminiModelRoute::Primary;
+    }
+
+    if let Some(err_str) = previous_error_code {
+        if let Some(code) = extract_error_code(Some(err_str)) {
+            if is_transient_capacity_error(code) {
+                return GeminiModelRoute::Fallback;
+            }
+        }
+    }
+
+    GeminiModelRoute::Primary
+}
+
+pub struct LocalContentPlanWorker<P: AIProvider + Clone + 'static = Arc<dyn AIProvider>> {
     pub worker_id: String,
     pub job_manager: Arc<JobManager>,
     pub planner: Arc<ContentPlanner<P>>,
@@ -112,7 +185,7 @@ pub struct LocalContentPlanWorker<P: AIProvider + 'static = Arc<dyn AIProvider>>
     pub sleeper: Arc<dyn RetrySleeper>,
 }
 
-impl<P: AIProvider + 'static> LocalContentPlanWorker<P> {
+impl<P: AIProvider + Clone + 'static> LocalContentPlanWorker<P> {
     pub fn new(
         worker_id: String,
         job_manager: Arc<JobManager>,
@@ -289,10 +362,11 @@ impl<P: AIProvider + 'static> LocalContentPlanWorker<P> {
                             | ContentPlanningError::ProviderTimeout(_)
                             | ContentPlanningError::ProviderUnavailable(_)
                     );
+                    let error_msg = format!("{}: {}", err.code(), err);
                     let _ = self.job_manager.fail_job_with_token(
                         &job.id,
                         job.lease_token.as_deref(),
-                        &err.to_string(),
+                        &error_msg,
                         allow_retry,
                     );
                 }
@@ -308,15 +382,36 @@ impl<P: AIProvider + 'static> LocalContentPlanWorker<P> {
             self.wait_for_retry_backoff(job)?;
         }
 
+        let previous_error_code = extract_error_code(job.error.as_deref());
+        let route = select_model_for_attempt(job.retry_count, job.max_retries, previous_error_code);
+
+        let active_planner = match route {
+            GeminiModelRoute::Primary => self.planner.clone(),
+            GeminiModelRoute::Fallback => {
+                tracing::warn!(
+                    job_id = %job.id,
+                    retry_count = %job.retry_count,
+                    max_retries = %job.max_retries,
+                    fallback_model = %FALLBACK_GEMINI_MODEL,
+                    "Primary model capacity exhausted after transient errors; executing attempt on fallback model"
+                );
+                Arc::new(self.planner.with_model(FALLBACK_GEMINI_MODEL))
+            }
+        };
+
         let payload: ContentPlanJobPayload = serde_json::from_str(&job.payload)
             .map_err(|e| ContentPlanningError::InvalidPlanningRequest(e.to_string()))?;
 
         match payload.operation {
-            PlanningOperation::Generate => self.process_generate_job(job, payload),
-            PlanningOperation::RegeneratePlan => self.process_regenerate_plan_job(job, payload),
-            PlanningOperation::RegenerateScene => self.process_regenerate_scene_job(job, payload),
+            PlanningOperation::Generate => self.process_generate_job(job, payload, &active_planner),
+            PlanningOperation::RegeneratePlan => {
+                self.process_regenerate_plan_job(job, payload, &active_planner)
+            }
+            PlanningOperation::RegenerateScene => {
+                self.process_regenerate_scene_job(job, payload, &active_planner)
+            }
             PlanningOperation::RegenerateNarration => {
-                self.process_regenerate_narration_job(job, payload)
+                self.process_regenerate_narration_job(job, payload, &active_planner)
             }
         }
     }
@@ -325,6 +420,7 @@ impl<P: AIProvider + 'static> LocalContentPlanWorker<P> {
         &self,
         job: &Job,
         payload: ContentPlanJobPayload,
+        active_planner: &Arc<ContentPlanner<P>>,
     ) -> Result<ContentPlan, ContentPlanningError> {
         // 1. validate_request
         self.job_manager
@@ -365,7 +461,7 @@ impl<P: AIProvider + 'static> LocalContentPlanWorker<P> {
             )
             .map_err(|e| ContentPlanningError::ContentPlanPersistFailed(e.to_string()))?;
 
-        let planner = self.planner.clone();
+        let planner = active_planner.clone();
         let req = payload.planning_request.clone();
         let draft = self.execute_with_heartbeat(job, {
             let planner = planner.clone();
@@ -460,6 +556,7 @@ impl<P: AIProvider + 'static> LocalContentPlanWorker<P> {
         &self,
         job: &Job,
         payload: ContentPlanJobPayload,
+        active_planner: &Arc<ContentPlanner<P>>,
     ) -> Result<ContentPlan, ContentPlanningError> {
         let plan_id = payload.base_plan_id.as_deref().ok_or_else(|| {
             ContentPlanningError::InvalidPlanningRequest("basePlanId required".to_string())
@@ -514,7 +611,7 @@ impl<P: AIProvider + 'static> LocalContentPlanWorker<P> {
 
         self.ensure_fenced_and_active(job)?;
 
-        let planner = self.planner.clone();
+        let planner = active_planner.clone();
         let instruction = payload.user_instruction.clone().unwrap_or_default();
         let sources = payload.source_context.clone();
         let new_plan = self.execute_with_heartbeat(job, move || {
@@ -582,6 +679,7 @@ impl<P: AIProvider + 'static> LocalContentPlanWorker<P> {
         &self,
         job: &Job,
         payload: ContentPlanJobPayload,
+        active_planner: &Arc<ContentPlanner<P>>,
     ) -> Result<ContentPlan, ContentPlanningError> {
         let plan_id = payload.base_plan_id.as_deref().ok_or_else(|| {
             ContentPlanningError::InvalidPlanningRequest("basePlanId required".to_string())
@@ -639,7 +737,7 @@ impl<P: AIProvider + 'static> LocalContentPlanWorker<P> {
 
         self.ensure_fenced_and_active(job)?;
 
-        let planner = self.planner.clone();
+        let planner = active_planner.clone();
         let instruction = payload.user_instruction.clone().unwrap_or_default();
         let sources = payload.source_context.clone();
         let s_id = scene_id.clone();
@@ -708,6 +806,7 @@ impl<P: AIProvider + 'static> LocalContentPlanWorker<P> {
         &self,
         job: &Job,
         payload: ContentPlanJobPayload,
+        active_planner: &Arc<ContentPlanner<P>>,
     ) -> Result<ContentPlan, ContentPlanningError> {
         let plan_id = payload.base_plan_id.as_deref().ok_or_else(|| {
             ContentPlanningError::InvalidPlanningRequest("basePlanId required".to_string())
@@ -765,7 +864,7 @@ impl<P: AIProvider + 'static> LocalContentPlanWorker<P> {
 
         self.ensure_fenced_and_active(job)?;
 
-        let planner = self.planner.clone();
+        let planner = active_planner.clone();
         let instruction = payload.user_instruction.clone().unwrap_or_default();
         let sources = payload.source_context.clone();
         let s_id = scene_id.clone();
@@ -831,7 +930,7 @@ impl<P: AIProvider + 'static> LocalContentPlanWorker<P> {
     }
 }
 
-pub fn start_local_content_plan_worker<P: AIProvider + 'static>(
+pub fn start_local_content_plan_worker<P: AIProvider + Clone + 'static>(
     worker_id: String,
     job_manager: Arc<JobManager>,
     planner: Arc<ContentPlanner<P>>,

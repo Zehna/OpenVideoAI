@@ -128,6 +128,8 @@ fn sample_plan(project_id: &str) -> ContentPlan {
         generation_metadata: Some(GenerationMetadata {
             provider: "gemini-default".to_string(),
             model: "gemini-3.8-flash".to_string(),
+            primary_model: Some("gemini-3.8-flash".to_string()),
+            fallback_used: Some(false),
             prompt_template_version: 1,
             planner_profile_version: 1,
             generated_at: "2026-09-12T10:00:00Z".to_string(),

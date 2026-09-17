@@ -111,6 +111,8 @@ pub enum MockOutcome {
     Unavailable,
     ModelUnavailable,
     TransientUnavailableOnce,
+    PrimaryUnavailableThenFallbackSuccess,
+    FallbackUnavailable,
 }
 
 pub struct MockProvider {
@@ -161,21 +163,30 @@ impl MockProvider {
 
     fn next_response(
         &self,
+        input: &ProviderRequest,
         valid_text: &'static str,
         malformed_text: &'static str,
     ) -> Result<ProviderResponse, ProviderError> {
         let _count = self.call_count.fetch_add(1, Ordering::SeqCst);
+        let target_model = input
+            .model
+            .as_deref()
+            .unwrap_or(crate::content_planning::provider::PRIMARY_GEMINI_MODEL);
         match self.outcome {
-            MockOutcome::Success => Ok(self.build_response(valid_text)),
-            MockOutcome::Malformed => Ok(self.build_response(malformed_text)),
+            MockOutcome::Success => Ok(self.build_response_with_model(valid_text, target_model)),
+            MockOutcome::Malformed => {
+                Ok(self.build_response_with_model(malformed_text, target_model))
+            }
             MockOutcome::Repairable => {
                 if !self.repair_failed.swap(true, Ordering::SeqCst) {
-                    Ok(self.build_response(malformed_text))
+                    Ok(self.build_response_with_model(malformed_text, target_model))
                 } else {
-                    Ok(self.build_response(valid_text))
+                    Ok(self.build_response_with_model(valid_text, target_model))
                 }
             }
-            MockOutcome::RepairExhausted => Ok(self.build_response(malformed_text)),
+            MockOutcome::RepairExhausted => {
+                Ok(self.build_response_with_model(malformed_text, target_model))
+            }
             MockOutcome::RateLimited => Err(ProviderError::RateLimited(
                 "mock rate limit exceeded".to_string(),
             )),
@@ -197,13 +208,29 @@ impl MockProvider {
                         "mock 503 high demand (transient)".to_string(),
                     ))
                 } else {
-                    Ok(self.build_response(valid_text))
+                    Ok(self.build_response_with_model(valid_text, target_model))
                 }
             }
+            MockOutcome::PrimaryUnavailableThenFallbackSuccess => {
+                if target_model == crate::content_planning::provider::FALLBACK_GEMINI_MODEL {
+                    Ok(self.build_response_with_model(valid_text, target_model))
+                } else {
+                    Err(ProviderError::Unavailable(
+                        "mock 503 high demand on primary model".to_string(),
+                    ))
+                }
+            }
+            MockOutcome::FallbackUnavailable => Err(ProviderError::Unavailable(
+                "mock 503 high demand on fallback model".to_string(),
+            )),
         }
     }
 
-    fn build_response(&self, text: &str) -> ProviderResponse {
+    pub fn build_response(&self, text: &str) -> ProviderResponse {
+        self.build_response_with_model(text, "mock-model")
+    }
+
+    pub fn build_response_with_model(&self, text: &str, model: &str) -> ProviderResponse {
         ProviderResponse {
             text: text.to_string(),
             usage: Some(GenerationUsage {
@@ -213,7 +240,7 @@ impl MockProvider {
                 provider_reported_cost: Some(0.0),
                 duration_ms: Some(100),
             }),
-            model: "mock-model".to_string(),
+            model: model.to_string(),
             provider: "mock".to_string(),
         }
     }
@@ -226,39 +253,37 @@ impl AIProvider for MockProvider {
 
     fn generate_planning_draft(
         &self,
-        _input: &ProviderRequest,
+        input: &ProviderRequest,
     ) -> Result<ProviderResponse, ProviderError> {
         match self.outcome {
             MockOutcome::Repairable | MockOutcome::RepairExhausted => {
                 self.call_count.fetch_add(1, Ordering::SeqCst);
-                Ok(self.build_response(MOCK_DRAFT_TEXT))
+                let target_model = input.model.as_deref().unwrap_or("mock-model");
+                Ok(self.build_response_with_model(MOCK_DRAFT_TEXT, target_model))
             }
-            _ => self.next_response(MOCK_DRAFT_TEXT, MOCK_MALFORMED_DRAFT),
+            _ => self.next_response(input, MOCK_DRAFT_TEXT, MOCK_MALFORMED_DRAFT),
         }
     }
 
     fn generate_content_plan(
         &self,
-        _input: &ProviderRequest,
+        input: &ProviderRequest,
     ) -> Result<ProviderResponse, ProviderError> {
-        self.next_response(MOCK_PLAN_JSON, MOCK_MALFORMED_JSON)
+        self.next_response(input, MOCK_PLAN_JSON, MOCK_MALFORMED_JSON)
     }
 
-    fn regenerate_plan(&self, _input: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
-        self.next_response(MOCK_PLAN_JSON, MOCK_MALFORMED_JSON)
+    fn regenerate_plan(&self, input: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
+        self.next_response(input, MOCK_PLAN_JSON, MOCK_MALFORMED_JSON)
     }
 
-    fn regenerate_scene(
-        &self,
-        _input: &ProviderRequest,
-    ) -> Result<ProviderResponse, ProviderError> {
-        self.next_response(MOCK_PLAN_JSON, MOCK_MALFORMED_JSON)
+    fn regenerate_scene(&self, input: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
+        self.next_response(input, MOCK_PLAN_JSON, MOCK_MALFORMED_JSON)
     }
 
     fn regenerate_narration(
         &self,
-        _input: &ProviderRequest,
+        input: &ProviderRequest,
     ) -> Result<ProviderResponse, ProviderError> {
-        self.next_response(MOCK_PLAN_JSON, MOCK_MALFORMED_JSON)
+        self.next_response(input, MOCK_PLAN_JSON, MOCK_MALFORMED_JSON)
     }
 }

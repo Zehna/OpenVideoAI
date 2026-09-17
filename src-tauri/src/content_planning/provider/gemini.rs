@@ -282,10 +282,11 @@ impl GeminiProvider {
     }
 
     fn execute_request(&self, input: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
-        let model_path = if self.config.model.starts_with("models/") {
-            self.config.model.clone()
+        let effective_model = input.model.as_deref().unwrap_or(&self.config.model);
+        let model_path = if effective_model.starts_with("models/") {
+            effective_model.to_string()
         } else {
-            format!("models/{}", self.config.model)
+            format!("models/{}", effective_model)
         };
         let url = format!(
             "{}/v1beta/{}:generateContent",
@@ -349,7 +350,7 @@ impl GeminiProvider {
         Ok(ProviderResponse {
             text: candidate_text,
             usage,
-            model: self.config.model.clone(),
+            model: effective_model.to_string(),
             provider: "gemini".to_string(),
         })
     }

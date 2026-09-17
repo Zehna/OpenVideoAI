@@ -118,6 +118,10 @@ pub struct GenerationUsage {
 pub struct GenerationMetadata {
     pub provider: String,
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_used: Option<bool>,
     pub planner_profile_version: i32,
     pub prompt_template_version: i32,
     pub generated_at: String,

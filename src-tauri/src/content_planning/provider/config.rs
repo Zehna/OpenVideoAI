@@ -1,7 +1,9 @@
 use crate::content_planning::model::PlannerProviderStatus;
 use crate::content_planning::provider::ProviderError;
 
-pub const DEFAULT_GEMINI_MODEL: &str = "gemini-3.8-flash";
+pub const PRIMARY_GEMINI_MODEL: &str = "gemini-3.8-flash";
+pub const FALLBACK_GEMINI_MODEL: &str = "gemini-3.6-flash";
+pub const DEFAULT_GEMINI_MODEL: &str = PRIMARY_GEMINI_MODEL;
 
 /// Runtime configuration containing the sensitive API key.
 /// Intentionally does NOT derive `Debug` or `Serialize` to prevent secret leakage.

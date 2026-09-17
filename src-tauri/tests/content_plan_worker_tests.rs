@@ -12,12 +12,14 @@ use openvideoai_lib::content_planning::model::{
 use openvideoai_lib::content_planning::planner::ContentPlanner;
 use openvideoai_lib::content_planning::provider::mock::{MockOutcome, MockProvider};
 use openvideoai_lib::content_planning::provider::{
-    AIProvider, ProviderError, ProviderRequest, ProviderResponse,
+    AIProvider, ProviderError, ProviderRequest, ProviderResponse, DEFAULT_GEMINI_MODEL,
+    FALLBACK_GEMINI_MODEL, PRIMARY_GEMINI_MODEL,
 };
 use openvideoai_lib::content_planning::service::ContentPlanService;
 use openvideoai_lib::content_planning::worker::{
-    calculate_retry_backoff, start_local_content_plan_worker, LocalContentPlanWorker,
-    RecordingRetrySleeper, RetrySleeper,
+    calculate_retry_backoff, extract_error_code, is_transient_capacity_error,
+    select_model_for_attempt, start_local_content_plan_worker, GeminiModelRoute,
+    LocalContentPlanWorker, RecordingRetrySleeper, RetrySleeper,
 };
 use openvideoai_lib::db::DbManager;
 use openvideoai_lib::events::bus::EventBus;
@@ -1097,4 +1099,298 @@ fn test_worker_stale_lease_during_backoff_aborts_safely() {
     // Zero plans published
     let plans = plan_service.list_project_plans("proj-1", false).unwrap();
     assert_eq!(plans.len(), 0);
+}
+
+#[test]
+fn test_fallback_constants() {
+    assert_eq!(PRIMARY_GEMINI_MODEL, "gemini-3.8-flash");
+    assert_eq!(FALLBACK_GEMINI_MODEL, "gemini-3.6-flash");
+    assert_eq!(DEFAULT_GEMINI_MODEL, PRIMARY_GEMINI_MODEL);
+}
+
+#[test]
+fn test_select_model_initial_attempt_uses_primary() {
+    let route = select_model_for_attempt(0, 3, None);
+    assert_eq!(route, GeminiModelRoute::Primary);
+}
+
+#[test]
+fn test_select_model_intermediate_attempt_uses_primary() {
+    let route1 = select_model_for_attempt(1, 3, Some("provider_unavailable: 503"));
+    assert_eq!(route1, GeminiModelRoute::Primary);
+
+    let route2 = select_model_for_attempt(2, 3, Some("provider_unavailable: 503"));
+    assert_eq!(route2, GeminiModelRoute::Primary);
+}
+
+#[test]
+fn test_select_model_final_attempt_with_503_uses_fallback() {
+    let route_code = select_model_for_attempt(3, 3, Some("provider_unavailable"));
+    assert_eq!(route_code, GeminiModelRoute::Fallback);
+
+    let route_msg =
+        select_model_for_attempt(3, 3, Some("provider_unavailable: High demand (HTTP 503)"));
+    assert_eq!(route_msg, GeminiModelRoute::Fallback);
+}
+
+#[test]
+fn test_select_model_final_attempt_with_rate_limit_uses_fallback() {
+    let route = select_model_for_attempt(
+        3,
+        3,
+        Some("provider_rate_limited: ResourceExhausted (HTTP 429)"),
+    );
+    assert_eq!(route, GeminiModelRoute::Fallback);
+}
+
+#[test]
+fn test_select_model_final_attempt_with_timeout_uses_fallback() {
+    let route = select_model_for_attempt(3, 3, Some("provider_timeout: Gateway Timeout"));
+    assert_eq!(route, GeminiModelRoute::Fallback);
+}
+
+#[test]
+fn test_select_model_final_attempt_with_non_retryable_error_uses_primary() {
+    let route_auth = select_model_for_attempt(3, 3, Some("provider_auth_failed: invalid key"));
+    assert_eq!(route_auth, GeminiModelRoute::Primary);
+
+    let route_model = select_model_for_attempt(3, 3, Some("provider_model_not_found: 404"));
+    assert_eq!(route_model, GeminiModelRoute::Primary);
+
+    let route_struct =
+        select_model_for_attempt(3, 3, Some("structured_output_invalid: parse error"));
+    assert_eq!(route_struct, GeminiModelRoute::Primary);
+}
+
+#[test]
+fn test_select_model_final_attempt_with_no_error_uses_primary() {
+    let route = select_model_for_attempt(3, 3, None);
+    assert_eq!(route, GeminiModelRoute::Primary);
+}
+
+#[test]
+fn test_select_model_restart_safety_from_persisted_row() {
+    let persisted_retry_count: i32 = 3;
+    let persisted_max_retries: i32 = 3;
+    let persisted_error_str = "provider_unavailable: High demand (HTTP 503)";
+
+    let code = extract_error_code(Some(persisted_error_str));
+    assert_eq!(code, Some("provider_unavailable"));
+    assert!(is_transient_capacity_error(code.unwrap()));
+
+    let route = select_model_for_attempt(
+        persisted_retry_count,
+        persisted_max_retries,
+        Some(persisted_error_str),
+    );
+    assert_eq!(route, GeminiModelRoute::Fallback);
+}
+
+#[test]
+fn test_worker_fallback_flow_primary_503_then_fallback_success() {
+    let (_dir, _db, job_mgr, plan_service, _planner, worker) =
+        setup_test_context(MockOutcome::PrimaryUnavailableThenFallbackSuccess);
+    let req = sample_request("proj-1");
+    let job = submit_generate_job(&job_mgr, "proj-1", req, None, None).unwrap();
+
+    // Attempt 1: retry_count = 0 -> Primary fails 503 -> Retryable (retry_count becomes 1)
+    let l1 = worker.acquire_job().unwrap().unwrap();
+    assert_eq!(l1.retry_count, 0);
+    assert!(worker.process_one_job(&l1).is_err());
+    let j1 = job_mgr.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(j1.status, JobState::Retryable);
+    assert_eq!(j1.retry_count, 1);
+
+    // Attempt 2: retry_count = 1 -> Primary fails 503 -> Retryable (retry_count becomes 2)
+    let l2 = worker.acquire_job().unwrap().unwrap();
+    assert_eq!(l2.retry_count, 1);
+    assert!(worker.process_one_job(&l2).is_err());
+    let j2 = job_mgr.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(j2.status, JobState::Retryable);
+    assert_eq!(j2.retry_count, 2);
+
+    // Attempt 3: retry_count = 2 -> Primary fails 503 -> Retryable (retry_count becomes 3)
+    let l3 = worker.acquire_job().unwrap().unwrap();
+    assert_eq!(l3.retry_count, 2);
+    assert!(worker.process_one_job(&l3).is_err());
+    let j3 = job_mgr.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(j3.status, JobState::Retryable);
+    assert_eq!(j3.retry_count, 3);
+
+    // Attempt 4: retry_count = 3 (final attempt, retry_count == max_retries).
+    // Worker routes to Fallback (gemini-3.6-flash). Fallback succeeds!
+    let l4 = worker.acquire_job().unwrap().unwrap();
+    assert_eq!(l4.retry_count, 3);
+    let res = worker.process_one_job(&l4);
+    assert!(res.is_ok(), "Fallback attempt should succeed: {:?}", res);
+
+    let final_job = job_mgr.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(final_job.status, JobState::Completed);
+
+    // Verify metadata on generated plan revision
+    let plans = plan_service.list_project_plans("proj-1", false).unwrap();
+    assert_eq!(plans.len(), 1);
+    let plan = plan_service.get_plan(&plans[0].id).unwrap().unwrap();
+    let gen_meta = plan
+        .generation_metadata
+        .expect("generation metadata must be present");
+    assert_eq!(gen_meta.model, FALLBACK_GEMINI_MODEL);
+    assert_eq!(
+        gen_meta.primary_model.as_deref(),
+        Some(PRIMARY_GEMINI_MODEL)
+    );
+    assert_eq!(gen_meta.fallback_used, Some(true));
+}
+
+#[test]
+fn test_worker_fallback_flow_primary_success_metadata() {
+    let (_dir, _db, job_mgr, plan_service, _planner, worker) =
+        setup_test_context(MockOutcome::Success);
+    let req = sample_request("proj-1");
+    let job = submit_generate_job(&job_mgr, "proj-1", req, None, None).unwrap();
+
+    let l1 = worker.acquire_job().unwrap().unwrap();
+    assert_eq!(l1.retry_count, 0);
+    let res = worker.process_one_job(&l1);
+    assert!(res.is_ok(), "Primary attempt should succeed: {:?}", res);
+
+    let final_job = job_mgr.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(final_job.status, JobState::Completed);
+
+    let plans = plan_service.list_project_plans("proj-1", false).unwrap();
+    assert_eq!(plans.len(), 1);
+    let plan = plan_service.get_plan(&plans[0].id).unwrap().unwrap();
+    let gen_meta = plan
+        .generation_metadata
+        .expect("generation metadata must be present");
+    assert_eq!(gen_meta.model, PRIMARY_GEMINI_MODEL);
+    assert_eq!(
+        gen_meta.primary_model.as_deref(),
+        Some(PRIMARY_GEMINI_MODEL)
+    );
+    assert_eq!(gen_meta.fallback_used, Some(false));
+}
+
+#[test]
+fn test_worker_fallback_exhaustion_dead_letter() {
+    let (_dir, _db, job_mgr, plan_service, _planner, worker) =
+        setup_test_context(MockOutcome::FallbackUnavailable);
+    let req = sample_request("proj-1");
+    let job = submit_generate_job(&job_mgr, "proj-1", req, None, None).unwrap();
+
+    // Attempts 1, 2, 3 fail on Primary
+    for expected_count in 0..3 {
+        let l = worker.acquire_job().unwrap().unwrap();
+        assert_eq!(l.retry_count, expected_count);
+        assert!(worker.process_one_job(&l).is_err());
+    }
+
+    // Attempt 4: retry_count = 3. Routes to fallback, fallback also fails.
+    // Since retry_count >= max_retries, it transitions to DeadLetter.
+    let l4 = worker.acquire_job().unwrap().unwrap();
+    assert_eq!(l4.retry_count, 3);
+    assert!(worker.process_one_job(&l4).is_err());
+
+    let final_job = job_mgr.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(final_job.status, JobState::DeadLetter);
+    assert_eq!(final_job.retry_count, 3);
+
+    // Zero plans published
+    let plans = plan_service.list_project_plans("proj-1", false).unwrap();
+    assert_eq!(plans.len(), 0);
+}
+
+#[test]
+fn test_worker_non_transient_does_not_trigger_fallback() {
+    let (_dir, _db, job_mgr, plan_service, _planner, worker) =
+        setup_test_context(MockOutcome::AuthFailed);
+    let req = sample_request("proj-1");
+    let job = submit_generate_job(&job_mgr, "proj-1", req, None, None).unwrap();
+
+    let l1 = worker.acquire_job().unwrap().unwrap();
+    assert_eq!(l1.retry_count, 0);
+    assert!(worker.process_one_job(&l1).is_err());
+
+    let final_job = job_mgr.get_job(&job.id).unwrap().unwrap();
+    assert_eq!(final_job.status, JobState::Failed);
+    assert_eq!(final_job.retry_count, 0);
+
+    assert!(worker.acquire_job().unwrap().is_none());
+    let plans = plan_service.list_project_plans("proj-1", false).unwrap();
+    assert_eq!(plans.len(), 0);
+}
+
+#[test]
+fn test_worker_fallback_respects_backoff_and_lease() {
+    let (_dir, _db, job_mgr, plan_service, _planner, _worker) =
+        setup_test_context(MockOutcome::PrimaryUnavailableThenFallbackSuccess);
+
+    let sleeper = Arc::new(RecordingRetrySleeper::new());
+    let mock_provider = Arc::new(MockProvider::new(
+        MockOutcome::PrimaryUnavailableThenFallbackSuccess,
+    ));
+    let planner = Arc::new(ContentPlanner::new(mock_provider));
+
+    let worker = LocalContentPlanWorker::new(
+        "worker-test-backoff".to_string(),
+        job_mgr.clone(),
+        planner,
+        plan_service,
+    )
+    .with_sleeper(sleeper.clone());
+
+    let req = sample_request("proj-1");
+    let _job = submit_generate_job(&job_mgr, "proj-1", req, None, None).unwrap();
+
+    // 3 primary failures
+    for _ in 0..3 {
+        let l = worker.acquire_job().unwrap().unwrap();
+        let _ = worker.process_one_job(&l);
+    }
+
+    // 4th attempt (fallback): verify backoff still waited before invocation
+    let sleep_count_before = sleeper.recorded_sleeps().len();
+    let l4 = worker.acquire_job().unwrap().unwrap();
+    assert_eq!(l4.retry_count, 3);
+    let res = worker.process_one_job(&l4);
+    assert!(res.is_ok());
+
+    let sleep_count_after = sleeper.recorded_sleeps().len();
+    assert!(
+        sleep_count_after > sleep_count_before,
+        "Backoff must have occurred prior to fallback execution"
+    );
+}
+
+#[test]
+fn test_worker_fallback_preserves_idempotency_and_job_identity() {
+    let (_dir, _db, job_mgr, plan_service, _planner, worker) =
+        setup_test_context(MockOutcome::PrimaryUnavailableThenFallbackSuccess);
+
+    let req = sample_request("proj-1");
+    let job = submit_generate_job(&job_mgr, "proj-1", req, None, None).unwrap();
+    let original_job_id = job.id.clone();
+    let original_idempotency_key = job.idempotency_key.clone();
+
+    // Run attempts 1-3 (failures)
+    for _ in 0..3 {
+        let l = worker.acquire_job().unwrap().unwrap();
+        assert_eq!(l.id, original_job_id);
+        let _ = worker.process_one_job(&l);
+    }
+
+    // Attempt 4 (fallback success)
+    let l4 = worker.acquire_job().unwrap().unwrap();
+    assert_eq!(l4.id, original_job_id);
+    let res = worker.process_one_job(&l4);
+    assert!(res.is_ok());
+
+    let final_job = job_mgr.get_job(&original_job_id).unwrap().unwrap();
+    assert_eq!(final_job.id, original_job_id);
+    assert_eq!(final_job.idempotency_key, original_idempotency_key);
+    assert_eq!(final_job.status, JobState::Completed);
+
+    // Verify exactly one plan created, exactly one job exists
+    let plans = plan_service.list_project_plans("proj-1", false).unwrap();
+    assert_eq!(plans.len(), 1);
 }

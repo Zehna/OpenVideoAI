@@ -6,7 +6,9 @@ use crate::content_planning::model::{
     PlanningSource, SourceRef,
 };
 use crate::content_planning::prompt::PromptBuilder;
-use crate::content_planning::provider::{AIProvider, ProviderError};
+use crate::content_planning::provider::{
+    AIProvider, ProviderError, ProviderRequest, FALLBACK_GEMINI_MODEL, PRIMARY_GEMINI_MODEL,
+};
 use crate::content_planning::validation::{
     validate_content_plan, validate_duration_tolerance, validate_planning_request,
     DEFAULT_DURATION_TOLERANCE,
@@ -34,17 +36,42 @@ fn sanitize_error_message(msg: &str) -> String {
     first_line.to_string()
 }
 
+#[derive(Clone)]
 pub struct ContentPlanner<P: AIProvider> {
     provider: P,
+    model: Option<String>,
 }
 
 impl<P: AIProvider> ContentPlanner<P> {
     pub fn new(provider: P) -> Self {
-        Self { provider }
+        Self {
+            provider,
+            model: None,
+        }
+    }
+
+    pub fn with_model(&self, model: &str) -> Self
+    where
+        P: Clone,
+    {
+        Self {
+            provider: self.provider.clone(),
+            model: Some(model.to_string()),
+        }
     }
 
     pub fn provider(&self) -> &P {
         &self.provider
+    }
+
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    fn build_repair_prompt(&self, malformed_json: &str, error_details: &str) -> ProviderRequest {
+        let mut prompt = PromptBuilder::build_repair_prompt(malformed_json, error_details);
+        prompt.model = self.model.clone();
+        prompt
     }
 
     pub fn execute_draft_stage(
@@ -52,6 +79,7 @@ impl<P: AIProvider> ContentPlanner<P> {
         request: &PlanningRequest,
     ) -> Result<String, ContentPlanningError> {
         let mut prompt = PromptBuilder::build_draft_prompt(request);
+        prompt.model = self.model.clone();
         for attempt in 0..MAX_MODEL_CALLS_PER_STAGE {
             match self.provider.generate_planning_draft(&prompt) {
                 Ok(resp) => {
@@ -62,7 +90,7 @@ impl<P: AIProvider> ContentPlanner<P> {
                                 "Draft generation failed: incomplete or empty draft".to_string(),
                             ));
                         }
-                        prompt = PromptBuilder::build_repair_prompt(
+                        prompt = self.build_repair_prompt(
                             &resp.text,
                             "Draft outline is incomplete or empty. Please provide a complete outline.",
                         );
@@ -75,10 +103,7 @@ impl<P: AIProvider> ContentPlanner<P> {
                     if attempt + 1 >= MAX_MODEL_CALLS_PER_STAGE {
                         return Err(ContentPlanningError::StructuredOutputInvalid(err_detail));
                     }
-                    prompt = PromptBuilder::build_repair_prompt(
-                        "",
-                        &sanitize_error_message(&err_detail),
-                    );
+                    prompt = self.build_repair_prompt("", &sanitize_error_message(&err_detail));
                 }
             }
         }
@@ -93,6 +118,7 @@ impl<P: AIProvider> ContentPlanner<P> {
         draft_text: &str,
     ) -> Result<ContentPlan, ContentPlanningError> {
         let mut prompt = PromptBuilder::build_plan_prompt(request, draft_text);
+        prompt.model = self.model.clone();
         let mut repair_count: usize = 0;
 
         for attempt in 0..MAX_MODEL_CALLS_PER_STAGE {
@@ -105,10 +131,7 @@ impl<P: AIProvider> ContentPlanner<P> {
                         return Err(ContentPlanningError::StructuredOutputInvalid(err_detail));
                     }
                     repair_count += 1;
-                    prompt = PromptBuilder::build_repair_prompt(
-                        "",
-                        &sanitize_error_message(&err_detail),
-                    );
+                    prompt = self.build_repair_prompt("", &sanitize_error_message(&err_detail));
                     continue;
                 }
             };
@@ -121,10 +144,8 @@ impl<P: AIProvider> ContentPlanner<P> {
                         return Err(ContentPlanningError::StructuredOutputInvalid(err_msg));
                     }
                     repair_count += 1;
-                    prompt = PromptBuilder::build_repair_prompt(
-                        &resp.text,
-                        &sanitize_error_message(&err_msg),
-                    );
+                    prompt =
+                        self.build_repair_prompt(&resp.text, &sanitize_error_message(&err_msg));
                     continue;
                 }
             };
@@ -136,10 +157,8 @@ impl<P: AIProvider> ContentPlanner<P> {
                     return Err(e);
                 }
                 repair_count += 1;
-                prompt = PromptBuilder::build_repair_prompt(
-                    &resp.text,
-                    &sanitize_error_message(&e.to_string()),
-                );
+                prompt =
+                    self.build_repair_prompt(&resp.text, &sanitize_error_message(&e.to_string()));
                 continue;
             }
 
@@ -152,10 +171,8 @@ impl<P: AIProvider> ContentPlanner<P> {
                     return Err(e);
                 }
                 repair_count += 1;
-                prompt = PromptBuilder::build_repair_prompt(
-                    &resp.text,
-                    &sanitize_error_message(&e.to_string()),
-                );
+                prompt =
+                    self.build_repair_prompt(&resp.text, &sanitize_error_message(&e.to_string()));
                 continue;
             }
 
@@ -164,10 +181,8 @@ impl<P: AIProvider> ContentPlanner<P> {
                     return Err(e);
                 }
                 repair_count += 1;
-                prompt = PromptBuilder::build_repair_prompt(
-                    &resp.text,
-                    &sanitize_error_message(&e.to_string()),
-                );
+                prompt =
+                    self.build_repair_prompt(&resp.text, &sanitize_error_message(&e.to_string()));
                 continue;
             }
 
@@ -178,7 +193,11 @@ impl<P: AIProvider> ContentPlanner<P> {
             plan.status = PlanStatus::Draft;
             plan.revision = 1;
 
+            let is_fallback = resp.model == FALLBACK_GEMINI_MODEL;
             if let Some(ref mut meta) = plan.generation_metadata {
+                meta.model = resp.model.clone();
+                meta.primary_model = Some(PRIMARY_GEMINI_MODEL.to_string());
+                meta.fallback_used = Some(is_fallback);
                 meta.repaired_calls = if repair_count > 0 {
                     Some(repair_count as u32)
                 } else {
@@ -188,6 +207,8 @@ impl<P: AIProvider> ContentPlanner<P> {
                 plan.generation_metadata = Some(GenerationMetadata {
                     provider: resp.provider.clone(),
                     model: resp.model.clone(),
+                    primary_model: Some(PRIMARY_GEMINI_MODEL.to_string()),
+                    fallback_used: Some(is_fallback),
                     planner_profile_version: PromptBuilder::PLANNER_PROFILE_VERSION,
                     prompt_template_version: PromptBuilder::PROMPT_TEMPLATE_VERSION,
                     generated_at: chrono::Utc::now().to_rfc3339(),
@@ -226,6 +247,7 @@ impl<P: AIProvider> ContentPlanner<P> {
         sources: &[PlanningSource],
     ) -> Result<ContentPlan, ContentPlanningError> {
         let mut prompt = PromptBuilder::build_regenerate_plan_prompt(base, instructions, sources);
+        prompt.model = self.model.clone();
         let mut repair_count: usize = 0;
 
         for attempt in 0..MAX_MODEL_CALLS_PER_STAGE {
@@ -237,10 +259,7 @@ impl<P: AIProvider> ContentPlanner<P> {
                         return Err(ContentPlanningError::StructuredOutputInvalid(err_detail));
                     }
                     repair_count += 1;
-                    prompt = PromptBuilder::build_repair_prompt(
-                        "",
-                        &sanitize_error_message(&err_detail),
-                    );
+                    prompt = self.build_repair_prompt("", &sanitize_error_message(&err_detail));
                     continue;
                 }
             };
@@ -253,10 +272,8 @@ impl<P: AIProvider> ContentPlanner<P> {
                         return Err(ContentPlanningError::StructuredOutputInvalid(err_msg));
                     }
                     repair_count += 1;
-                    prompt = PromptBuilder::build_repair_prompt(
-                        &resp.text,
-                        &sanitize_error_message(&err_msg),
-                    );
+                    prompt =
+                        self.build_repair_prompt(&resp.text, &sanitize_error_message(&err_msg));
                     continue;
                 }
             };
@@ -268,10 +285,8 @@ impl<P: AIProvider> ContentPlanner<P> {
                     return Err(e);
                 }
                 repair_count += 1;
-                prompt = PromptBuilder::build_repair_prompt(
-                    &resp.text,
-                    &sanitize_error_message(&e.to_string()),
-                );
+                prompt =
+                    self.build_repair_prompt(&resp.text, &sanitize_error_message(&e.to_string()));
                 continue;
             }
 
@@ -284,10 +299,8 @@ impl<P: AIProvider> ContentPlanner<P> {
                     return Err(e);
                 }
                 repair_count += 1;
-                prompt = PromptBuilder::build_repair_prompt(
-                    &resp.text,
-                    &sanitize_error_message(&e.to_string()),
-                );
+                prompt =
+                    self.build_repair_prompt(&resp.text, &sanitize_error_message(&e.to_string()));
                 continue;
             }
 
@@ -296,10 +309,8 @@ impl<P: AIProvider> ContentPlanner<P> {
                     return Err(e);
                 }
                 repair_count += 1;
-                prompt = PromptBuilder::build_repair_prompt(
-                    &resp.text,
-                    &sanitize_error_message(&e.to_string()),
-                );
+                prompt =
+                    self.build_repair_prompt(&resp.text, &sanitize_error_message(&e.to_string()));
                 continue;
             }
 
@@ -309,7 +320,11 @@ impl<P: AIProvider> ContentPlanner<P> {
             plan.status = PlanStatus::Draft;
             plan.target_duration_ms = base.target_duration_ms;
 
+            let is_fallback = resp.model == FALLBACK_GEMINI_MODEL;
             if let Some(ref mut meta) = plan.generation_metadata {
+                meta.model = resp.model.clone();
+                meta.primary_model = Some(PRIMARY_GEMINI_MODEL.to_string());
+                meta.fallback_used = Some(is_fallback);
                 meta.repaired_calls = if repair_count > 0 {
                     Some(repair_count as u32)
                 } else {
@@ -319,6 +334,8 @@ impl<P: AIProvider> ContentPlanner<P> {
                 plan.generation_metadata = Some(GenerationMetadata {
                     provider: resp.provider.clone(),
                     model: resp.model.clone(),
+                    primary_model: Some(PRIMARY_GEMINI_MODEL.to_string()),
+                    fallback_used: Some(is_fallback),
                     planner_profile_version: PromptBuilder::PLANNER_PROFILE_VERSION,
                     prompt_template_version: PromptBuilder::PROMPT_TEMPLATE_VERSION,
                     generated_at: chrono::Utc::now().to_rfc3339(),
@@ -361,6 +378,7 @@ impl<P: AIProvider> ContentPlanner<P> {
 
         let mut prompt =
             PromptBuilder::build_regenerate_scene_prompt(base, scene_id, instructions, sources);
+        prompt.model = self.model.clone();
         let mut repair_count: usize = 0;
 
         for attempt in 0..MAX_MODEL_CALLS_PER_STAGE {
@@ -372,48 +390,41 @@ impl<P: AIProvider> ContentPlanner<P> {
                         return Err(ContentPlanningError::StructuredOutputInvalid(err_detail));
                     }
                     repair_count += 1;
-                    prompt = PromptBuilder::build_repair_prompt(
-                        "",
-                        &sanitize_error_message(&err_detail),
-                    );
+                    prompt = self.build_repair_prompt("", &sanitize_error_message(&err_detail));
                     continue;
                 }
             };
 
-            let candidate_scene: ContentScene =
-                if let Ok(scene) = serde_json::from_str::<ContentScene>(&resp.text) {
-                    scene
-                } else if let Ok(plan) = serde_json::from_str::<ContentPlan>(&resp.text) {
-                    match plan.scenes.into_iter().find(|s| s.id == scene_id) {
-                        Some(s) => s,
-                        None => {
-                            let err_msg =
-                                format!("ContentPlan response missing target scene '{}'", scene_id);
-                            if attempt + 1 >= MAX_MODEL_CALLS_PER_STAGE {
-                                return Err(ContentPlanningError::StructuredOutputInvalid(err_msg));
-                            }
-                            repair_count += 1;
-                            prompt = PromptBuilder::build_repair_prompt(
-                                &resp.text,
-                                &sanitize_error_message(&err_msg),
-                            );
-                            continue;
+            let candidate_scene: ContentScene = if let Ok(scene) =
+                serde_json::from_str::<ContentScene>(&resp.text)
+            {
+                scene
+            } else if let Ok(plan) = serde_json::from_str::<ContentPlan>(&resp.text) {
+                match plan.scenes.into_iter().find(|s| s.id == scene_id) {
+                    Some(s) => s,
+                    None => {
+                        let err_msg =
+                            format!("ContentPlan response missing target scene '{}'", scene_id);
+                        if attempt + 1 >= MAX_MODEL_CALLS_PER_STAGE {
+                            return Err(ContentPlanningError::StructuredOutputInvalid(err_msg));
                         }
+                        repair_count += 1;
+                        prompt =
+                            self.build_repair_prompt(&resp.text, &sanitize_error_message(&err_msg));
+                        continue;
                     }
-                } else {
-                    let err_msg =
-                        "Failed to parse scene regeneration output as ContentScene or ContentPlan"
-                            .to_string();
-                    if attempt + 1 >= MAX_MODEL_CALLS_PER_STAGE {
-                        return Err(ContentPlanningError::StructuredOutputInvalid(err_msg));
-                    }
-                    repair_count += 1;
-                    prompt = PromptBuilder::build_repair_prompt(
-                        &resp.text,
-                        &sanitize_error_message(&err_msg),
-                    );
-                    continue;
-                };
+                }
+            } else {
+                let err_msg =
+                    "Failed to parse scene regeneration output as ContentScene or ContentPlan"
+                        .to_string();
+                if attempt + 1 >= MAX_MODEL_CALLS_PER_STAGE {
+                    return Err(ContentPlanningError::StructuredOutputInvalid(err_msg));
+                }
+                repair_count += 1;
+                prompt = self.build_repair_prompt(&resp.text, &sanitize_error_message(&err_msg));
+                continue;
+            };
 
             let mut plan = base.clone();
             let mut updated_scene = candidate_scene;
@@ -428,10 +439,8 @@ impl<P: AIProvider> ContentPlanner<P> {
                     return Err(e);
                 }
                 repair_count += 1;
-                prompt = PromptBuilder::build_repair_prompt(
-                    &resp.text,
-                    &sanitize_error_message(&e.to_string()),
-                );
+                prompt =
+                    self.build_repair_prompt(&resp.text, &sanitize_error_message(&e.to_string()));
                 continue;
             }
 
@@ -440,10 +449,8 @@ impl<P: AIProvider> ContentPlanner<P> {
                     return Err(e);
                 }
                 repair_count += 1;
-                prompt = PromptBuilder::build_repair_prompt(
-                    &resp.text,
-                    &sanitize_error_message(&e.to_string()),
-                );
+                prompt =
+                    self.build_repair_prompt(&resp.text, &sanitize_error_message(&e.to_string()));
                 continue;
             }
 
@@ -456,19 +463,20 @@ impl<P: AIProvider> ContentPlanner<P> {
                     return Err(e);
                 }
                 repair_count += 1;
-                prompt = PromptBuilder::build_repair_prompt(
-                    &resp.text,
-                    &sanitize_error_message(&e.to_string()),
-                );
+                prompt =
+                    self.build_repair_prompt(&resp.text, &sanitize_error_message(&e.to_string()));
                 continue;
             }
 
             plan.revision = base.revision + 1;
             plan.status = PlanStatus::Draft;
 
+            let is_fallback = resp.model == FALLBACK_GEMINI_MODEL;
             plan.generation_metadata = Some(GenerationMetadata {
                 provider: resp.provider.clone(),
                 model: resp.model.clone(),
+                primary_model: Some(PRIMARY_GEMINI_MODEL.to_string()),
+                fallback_used: Some(is_fallback),
                 planner_profile_version: PromptBuilder::PLANNER_PROFILE_VERSION,
                 prompt_template_version: PromptBuilder::PROMPT_TEMPLATE_VERSION,
                 generated_at: chrono::Utc::now().to_rfc3339(),
@@ -511,6 +519,7 @@ impl<P: AIProvider> ContentPlanner<P> {
 
         let mut prompt =
             PromptBuilder::build_regenerate_narration_prompt(base, scene_id, instructions, sources);
+        prompt.model = self.model.clone();
         let mut repair_count: usize = 0;
 
         for attempt in 0..MAX_MODEL_CALLS_PER_STAGE {
@@ -522,73 +531,64 @@ impl<P: AIProvider> ContentPlanner<P> {
                         return Err(ContentPlanningError::StructuredOutputInvalid(err_detail));
                     }
                     repair_count += 1;
-                    prompt = PromptBuilder::build_repair_prompt(
-                        "",
-                        &sanitize_error_message(&err_detail),
-                    );
+                    prompt = self.build_repair_prompt("", &sanitize_error_message(&err_detail));
                     continue;
                 }
             };
 
-            let (new_narration, new_claims, new_source_refs) =
-                if let Ok(scene) = serde_json::from_str::<ContentScene>(&resp.text) {
-                    (scene.narration, scene.claims, scene.source_refs)
-                } else if let Ok(plan) = serde_json::from_str::<ContentPlan>(&resp.text) {
-                    match plan.scenes.into_iter().find(|s| s.id == scene_id) {
-                        Some(s) => (s.narration, s.claims, s.source_refs),
-                        None => {
-                            let err_msg =
-                                format!("ContentPlan response missing target scene '{}'", scene_id);
-                            if attempt + 1 >= MAX_MODEL_CALLS_PER_STAGE {
-                                return Err(ContentPlanningError::StructuredOutputInvalid(err_msg));
-                            }
-                            repair_count += 1;
-                            prompt = PromptBuilder::build_repair_prompt(
-                                &resp.text,
-                                &sanitize_error_message(&err_msg),
-                            );
-                            continue;
-                        }
-                    }
-                } else if let Ok(val) = serde_json::from_str::<serde_json::Value>(&resp.text) {
-                    let narration = val
-                        .get("narration")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    let claims: Option<Vec<Claim>> = val
-                        .get("claims")
-                        .and_then(|v| serde_json::from_value(v.clone()).ok());
-                    let source_refs: Option<Vec<SourceRef>> = val
-                        .get("sourceRefs")
-                        .and_then(|v| serde_json::from_value(v.clone()).ok());
-                    if let (Some(n), Some(c)) = (narration, claims) {
-                        (n, c, source_refs.unwrap_or_default())
-                    } else {
+            let (new_narration, new_claims, new_source_refs) = if let Ok(scene) =
+                serde_json::from_str::<ContentScene>(&resp.text)
+            {
+                (scene.narration, scene.claims, scene.source_refs)
+            } else if let Ok(plan) = serde_json::from_str::<ContentPlan>(&resp.text) {
+                match plan.scenes.into_iter().find(|s| s.id == scene_id) {
+                    Some(s) => (s.narration, s.claims, s.source_refs),
+                    None => {
                         let err_msg =
-                            "Missing 'narration' or 'claims' in narration regeneration output"
-                                .to_string();
+                            format!("ContentPlan response missing target scene '{}'", scene_id);
                         if attempt + 1 >= MAX_MODEL_CALLS_PER_STAGE {
                             return Err(ContentPlanningError::StructuredOutputInvalid(err_msg));
                         }
                         repair_count += 1;
-                        prompt = PromptBuilder::build_repair_prompt(
-                            &resp.text,
-                            &sanitize_error_message(&err_msg),
-                        );
+                        prompt =
+                            self.build_repair_prompt(&resp.text, &sanitize_error_message(&err_msg));
                         continue;
                     }
+                }
+            } else if let Ok(val) = serde_json::from_str::<serde_json::Value>(&resp.text) {
+                let narration = val
+                    .get("narration")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let claims: Option<Vec<Claim>> = val
+                    .get("claims")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok());
+                let source_refs: Option<Vec<SourceRef>> = val
+                    .get("sourceRefs")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok());
+                if let (Some(n), Some(c)) = (narration, claims) {
+                    (n, c, source_refs.unwrap_or_default())
                 } else {
-                    let err_msg = "Failed to parse narration output as JSON".to_string();
+                    let err_msg =
+                        "Missing 'narration' or 'claims' in narration regeneration output"
+                            .to_string();
                     if attempt + 1 >= MAX_MODEL_CALLS_PER_STAGE {
                         return Err(ContentPlanningError::StructuredOutputInvalid(err_msg));
                     }
                     repair_count += 1;
-                    prompt = PromptBuilder::build_repair_prompt(
-                        &resp.text,
-                        &sanitize_error_message(&err_msg),
-                    );
+                    prompt =
+                        self.build_repair_prompt(&resp.text, &sanitize_error_message(&err_msg));
                     continue;
-                };
+                }
+            } else {
+                let err_msg = "Failed to parse narration output as JSON".to_string();
+                if attempt + 1 >= MAX_MODEL_CALLS_PER_STAGE {
+                    return Err(ContentPlanningError::StructuredOutputInvalid(err_msg));
+                }
+                repair_count += 1;
+                prompt = self.build_repair_prompt(&resp.text, &sanitize_error_message(&err_msg));
+                continue;
+            };
 
             let mut plan = base.clone();
             plan.scenes[target_idx].narration = new_narration;
@@ -602,10 +602,8 @@ impl<P: AIProvider> ContentPlanner<P> {
                     return Err(e);
                 }
                 repair_count += 1;
-                prompt = PromptBuilder::build_repair_prompt(
-                    &resp.text,
-                    &sanitize_error_message(&e.to_string()),
-                );
+                prompt =
+                    self.build_repair_prompt(&resp.text, &sanitize_error_message(&e.to_string()));
                 continue;
             }
 
@@ -614,19 +612,20 @@ impl<P: AIProvider> ContentPlanner<P> {
                     return Err(e);
                 }
                 repair_count += 1;
-                prompt = PromptBuilder::build_repair_prompt(
-                    &resp.text,
-                    &sanitize_error_message(&e.to_string()),
-                );
+                prompt =
+                    self.build_repair_prompt(&resp.text, &sanitize_error_message(&e.to_string()));
                 continue;
             }
 
             plan.revision = base.revision + 1;
             plan.status = PlanStatus::Draft;
 
+            let is_fallback = resp.model == FALLBACK_GEMINI_MODEL;
             plan.generation_metadata = Some(GenerationMetadata {
                 provider: resp.provider.clone(),
                 model: resp.model.clone(),
+                primary_model: Some(PRIMARY_GEMINI_MODEL.to_string()),
+                fallback_used: Some(is_fallback),
                 planner_profile_version: PromptBuilder::PLANNER_PROFILE_VERSION,
                 prompt_template_version: PromptBuilder::PROMPT_TEMPLATE_VERSION,
                 generated_at: chrono::Utc::now().to_rfc3339(),

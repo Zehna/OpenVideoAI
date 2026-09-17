@@ -122,6 +122,8 @@ fn create_valid_plan() -> ContentPlan {
         generation_metadata: Some(GenerationMetadata {
             provider: "gemini".to_string(),
             model: "gemini-3.8-flash".to_string(),
+            primary_model: Some("gemini-3.8-flash".to_string()),
+            fallback_used: Some(false),
             planner_profile_version: 1,
             prompt_template_version: 1,
             generated_at: "2026-09-12T10:00:00Z".to_string(),

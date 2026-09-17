@@ -193,6 +193,7 @@ fn test_mock_provider_deterministic_success() {
         system_prompt: "sys prompt".to_string(),
         user_prompt: "user prompt".to_string(),
         schema_name: Some("content_plan".to_string()),
+        model: None,
     };
 
     let resp1 = provider.generate_content_plan(&req).expect("must succeed");
@@ -243,6 +244,7 @@ fn test_mock_provider_repairable() {
         system_prompt: "sys prompt".to_string(),
         user_prompt: "user prompt".to_string(),
         schema_name: Some("content_plan".to_string()),
+        model: None,
     };
 
     // First call returns malformed JSON
@@ -278,6 +280,7 @@ fn test_mock_provider_error_modes() {
         system_prompt: "sys prompt".to_string(),
         user_prompt: "user prompt".to_string(),
         schema_name: Some("content_plan".to_string()),
+        model: None,
     };
 
     // RateLimited

@@ -74,6 +74,8 @@ export interface GenerationUsage {
 export interface GenerationMetadata {
   provider: string;
   model: string;
+  primaryModel?: string;
+  fallbackUsed?: boolean;
   plannerProfileVersion: number;
   promptTemplateVersion: number;
   generatedAt: string;

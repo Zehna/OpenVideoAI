@@ -116,6 +116,7 @@ pub fn build_draft_prompt(request: &PlanningRequest) -> ProviderRequest {
         system_prompt,
         user_prompt,
         schema_name: None,
+        model: None,
     }
 }
 
@@ -202,6 +203,7 @@ You must output a single, valid JSON object strictly adhering to the ContentPlan
         system_prompt,
         user_prompt,
         schema_name: Some("content_plan".to_string()),
+        model: None,
     }
 }
 
@@ -234,6 +236,7 @@ Output a single, valid JSON object strictly adhering to the ContentPlan schema."
         system_prompt,
         user_prompt,
         schema_name: Some("content_plan".to_string()),
+        model: None,
     }
 }
 
@@ -274,6 +277,7 @@ pub fn build_regenerate_scene_prompt(
         system_prompt,
         user_prompt,
         schema_name: Some("content_scene".to_string()),
+        model: None,
     }
 }
 
@@ -313,6 +317,7 @@ pub fn build_regenerate_narration_prompt(
         system_prompt,
         user_prompt,
         schema_name: Some("scene_narration".to_string()),
+        model: None,
     }
 }
 
@@ -333,5 +338,6 @@ pub fn build_repair_prompt(malformed_json: &str, error_details: &str) -> Provide
         system_prompt,
         user_prompt,
         schema_name: Some("content_plan".to_string()),
+        model: None,
     }
 }

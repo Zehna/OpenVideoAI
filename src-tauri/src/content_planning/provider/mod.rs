@@ -14,6 +14,7 @@ pub struct ProviderRequest {
     pub system_prompt: String,
     pub user_prompt: String,
     pub schema_name: Option<String>,
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

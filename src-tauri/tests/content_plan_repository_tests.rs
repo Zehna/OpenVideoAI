@@ -54,6 +54,8 @@ fn sample_plan(id: &str, project_id: &str, revision: i64) -> ContentPlan {
         generation_metadata: Some(GenerationMetadata {
             provider: "mock".to_string(),
             model: "mock-planner-v1".to_string(),
+            primary_model: Some("mock-planner-v1".to_string()),
+            fallback_used: Some(false),
             planner_profile_version: 1,
             prompt_template_version: 1,
             generated_at: "2026-09-12T10:00:00Z".to_string(),
