@@ -142,10 +142,7 @@ pub fn is_transient_capacity_error(code: &str) -> bool {
     let normalized = code.trim().to_ascii_lowercase();
     matches!(
         normalized.as_str(),
-        "provider_unavailable"
-            | "provider_rate_limited"
-            | "provider_timeout"
-            | "transient_unavailable"
+        "provider_unavailable" | "transient_unavailable"
     )
 }
 
@@ -158,7 +155,7 @@ pub fn select_model_for_attempt(
     // Only route to Fallback when:
     // 1. We are on the final eligible attempt: retry_count >= max_retries
     //    (e.g., retry_count == 3 when max_retries == 3).
-    // 2. The previous error was a transient capacity error (503 / 429 / 408).
+    // 2. The previous error was specifically provider unavailability (HTTP 503 high demand / capacity exhaustion).
     // All initial attempts (retry_count == 0) and intermediate retries (retry_count < max_retries)
     // use Primary.
     if retry_count <= 0 || retry_count < max_retries {

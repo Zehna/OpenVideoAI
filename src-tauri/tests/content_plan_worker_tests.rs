@@ -1134,19 +1134,52 @@ fn test_select_model_final_attempt_with_503_uses_fallback() {
 }
 
 #[test]
-fn test_select_model_final_attempt_with_rate_limit_uses_fallback() {
+fn test_select_model_final_attempt_with_rate_limit_uses_primary() {
     let route = select_model_for_attempt(
         3,
         3,
         Some("provider_rate_limited: ResourceExhausted (HTTP 429)"),
     );
-    assert_eq!(route, GeminiModelRoute::Fallback);
+    assert_eq!(route, GeminiModelRoute::Primary);
 }
 
 #[test]
-fn test_select_model_final_attempt_with_timeout_uses_fallback() {
+fn test_select_model_final_attempt_with_timeout_uses_primary() {
     let route = select_model_for_attempt(3, 3, Some("provider_timeout: Gateway Timeout"));
-    assert_eq!(route, GeminiModelRoute::Fallback);
+    assert_eq!(route, GeminiModelRoute::Primary);
+}
+
+#[test]
+fn test_select_model_final_attempt_with_non_eligible_errors_uses_primary() {
+    let non_eligible_cases = [
+        "provider_rate_limited",
+        "provider_rate_limited: 429 quota exhausted",
+        "provider_timeout",
+        "provider_timeout: 408 request timeout",
+        "provider_auth_missing",
+        "provider_auth_missing: no key set",
+        "provider_auth_failed",
+        "provider_auth_failed: invalid API key",
+        "provider_model_unavailable",
+        "provider_model_unavailable: model 404",
+        "structured_output_invalid",
+        "structured_output_invalid: json schema mismatch",
+        "content_plan_validation_failed",
+        "source_grounding_invalid",
+        "content_plan_revision_conflict",
+        "planning_cancelled",
+        "stale_lease",
+    ];
+
+    for err in non_eligible_cases {
+        let route = select_model_for_attempt(3, 3, Some(err));
+        assert_eq!(
+            route,
+            GeminiModelRoute::Primary,
+            "Error '{}' must not trigger fallback and must use Primary",
+            err
+        );
+    }
 }
 
 #[test]
