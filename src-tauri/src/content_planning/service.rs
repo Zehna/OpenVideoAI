@@ -16,14 +16,59 @@ use crate::db::DbManager;
 use crate::events::bus::EventBus;
 use crate::events::model::DomainEvent;
 
+pub trait Clock: Send + Sync {
+    fn now(&self) -> String;
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> String {
+        Utc::now().to_rfc3339()
+    }
+}
+
+pub struct FixedClock {
+    now: std::sync::RwLock<String>,
+}
+
+impl FixedClock {
+    pub fn new(now: impl Into<String>) -> Self {
+        Self {
+            now: std::sync::RwLock::new(now.into()),
+        }
+    }
+
+    pub fn set(&self, now: impl Into<String>) {
+        *self.now.write().unwrap() = now.into();
+    }
+}
+
+impl Clock for FixedClock {
+    fn now(&self) -> String {
+        self.now.read().unwrap().clone()
+    }
+}
+
 pub struct ContentPlanService {
     db: Arc<DbManager>,
     event_bus: Arc<EventBus>,
+    clock: Arc<dyn Clock>,
 }
 
 impl ContentPlanService {
     pub fn new(db: Arc<DbManager>, event_bus: Arc<EventBus>) -> Self {
-        Self { db, event_bus }
+        Self {
+            db,
+            event_bus,
+            clock: Arc::new(SystemClock),
+        }
+    }
+
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     pub fn get_plan(&self, plan_id: &str) -> Result<Option<ContentPlan>, ContentPlanningError> {
@@ -127,7 +172,7 @@ impl ContentPlanService {
         edited.created_at = current.created_at.clone();
         edited.revision = expected_revision + 1;
         edited.status = PlanStatus::Draft;
-        edited.updated_at = Utc::now().to_rfc3339();
+        edited.updated_at = self.clock.now();
 
         // 10. Begin transaction
         let tx = conn
@@ -203,7 +248,7 @@ impl ContentPlanService {
             DEFAULT_DURATION_TOLERANCE,
         )?;
 
-        let now = Utc::now().to_rfc3339();
+        let now = self.clock.now();
 
         let tx = conn
             .transaction()
@@ -255,7 +300,7 @@ impl ContentPlanService {
             });
         }
 
-        let now = Utc::now().to_rfc3339();
+        let now = self.clock.now();
 
         let tx = conn
             .transaction()
@@ -304,9 +349,12 @@ impl ContentPlanService {
         match base_revision {
             None => {
                 // Initial generation
+                let now = self.clock.now();
                 candidate.id = plan_id.to_string();
                 candidate.revision = 1;
                 candidate.status = PlanStatus::Draft;
+                candidate.created_at = now.clone();
+                candidate.updated_at = now;
                 derive_plan_fields(&mut candidate);
                 validate_content_plan(&candidate)?;
                 validate_grounding(&candidate, &sources)?;
@@ -363,12 +411,13 @@ impl ContentPlanService {
                     });
                 }
 
+                let now = self.clock.now();
                 candidate.id = plan_id.to_string();
                 candidate.project_id = current.project_id.clone();
                 candidate.created_at = current.created_at.clone();
                 candidate.revision = base_rev + 1;
                 candidate.status = PlanStatus::Draft;
-                candidate.updated_at = Utc::now().to_rfc3339();
+                candidate.updated_at = now;
                 derive_plan_fields(&mut candidate);
                 validate_content_plan(&candidate)?;
                 validate_grounding(&candidate, &sources)?;

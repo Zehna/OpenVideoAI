@@ -436,7 +436,7 @@ impl JobRepository {
     ) -> Result<Job, JobError> {
         let now = Utc::now().to_rfc3339();
 
-        let mut query = "UPDATE jobs SET status = 'completed', result = ?1, leased_by = NULL, lease_token = NULL, lease_expires_at = NULL, completed_at = ?2, updated_at = ?2 WHERE id = ?3 AND status NOT IN ('completed', 'failed', 'cancelled', 'dead_letter')".to_string();
+        let mut query = "UPDATE jobs SET status = 'completed', result = ?1, error = NULL, leased_by = NULL, lease_token = NULL, lease_expires_at = NULL, completed_at = ?2, updated_at = ?2 WHERE id = ?3 AND status NOT IN ('completed', 'failed', 'cancelled', 'dead_letter')".to_string();
         if worker_id.is_some() || lease_token.is_some() {
             query.push_str(" AND status = 'running' AND lease_expires_at >= ?2");
         }

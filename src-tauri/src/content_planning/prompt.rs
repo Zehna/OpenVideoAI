@@ -168,9 +168,7 @@ You must output a single, valid JSON object strictly adhering to the ContentPlan
     }
   ],
   "sourceRefs": [],
-  "generationMetadata": null,
-  "createdAt": "<iso_timestamp>",
-  "updatedAt": "<iso_timestamp>"
+  "generationMetadata": null
 }"#;
 
     let system_prompt = format!(

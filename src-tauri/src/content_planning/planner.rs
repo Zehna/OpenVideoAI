@@ -192,12 +192,16 @@ impl<P: AIProvider> ContentPlanner<P> {
             plan.target_duration_ms = request.target_duration_ms;
             plan.status = PlanStatus::Draft;
             plan.revision = 1;
+            let now_str = chrono::Utc::now().to_rfc3339();
+            plan.created_at = now_str.clone();
+            plan.updated_at = now_str.clone();
 
             let is_fallback = resp.model == FALLBACK_GEMINI_MODEL;
             if let Some(ref mut meta) = plan.generation_metadata {
                 meta.model = resp.model.clone();
                 meta.primary_model = Some(PRIMARY_GEMINI_MODEL.to_string());
                 meta.fallback_used = Some(is_fallback);
+                meta.generated_at = now_str;
                 meta.repaired_calls = if repair_count > 0 {
                     Some(repair_count as u32)
                 } else {
@@ -211,7 +215,7 @@ impl<P: AIProvider> ContentPlanner<P> {
                     fallback_used: Some(is_fallback),
                     planner_profile_version: PromptBuilder::PLANNER_PROFILE_VERSION,
                     prompt_template_version: PromptBuilder::PROMPT_TEMPLATE_VERSION,
-                    generated_at: chrono::Utc::now().to_rfc3339(),
+                    generated_at: now_str,
                     usage: resp.usage.unwrap_or_default(),
                     repaired_calls: if repair_count > 0 {
                         Some(repair_count as u32)
@@ -319,12 +323,16 @@ impl<P: AIProvider> ContentPlanner<P> {
             plan.revision = base.revision + 1;
             plan.status = PlanStatus::Draft;
             plan.target_duration_ms = base.target_duration_ms;
+            let now_str = chrono::Utc::now().to_rfc3339();
+            plan.created_at = base.created_at.clone();
+            plan.updated_at = now_str.clone();
 
             let is_fallback = resp.model == FALLBACK_GEMINI_MODEL;
             if let Some(ref mut meta) = plan.generation_metadata {
                 meta.model = resp.model.clone();
                 meta.primary_model = Some(PRIMARY_GEMINI_MODEL.to_string());
                 meta.fallback_used = Some(is_fallback);
+                meta.generated_at = now_str;
                 meta.repaired_calls = if repair_count > 0 {
                     Some(repair_count as u32)
                 } else {
@@ -338,7 +346,7 @@ impl<P: AIProvider> ContentPlanner<P> {
                     fallback_used: Some(is_fallback),
                     planner_profile_version: PromptBuilder::PLANNER_PROFILE_VERSION,
                     prompt_template_version: PromptBuilder::PROMPT_TEMPLATE_VERSION,
-                    generated_at: chrono::Utc::now().to_rfc3339(),
+                    generated_at: now_str,
                     usage: resp.usage.unwrap_or_default(),
                     repaired_calls: if repair_count > 0 {
                         Some(repair_count as u32)
@@ -470,6 +478,9 @@ impl<P: AIProvider> ContentPlanner<P> {
 
             plan.revision = base.revision + 1;
             plan.status = PlanStatus::Draft;
+            let now_str = chrono::Utc::now().to_rfc3339();
+            plan.created_at = base.created_at.clone();
+            plan.updated_at = now_str.clone();
 
             let is_fallback = resp.model == FALLBACK_GEMINI_MODEL;
             plan.generation_metadata = Some(GenerationMetadata {
@@ -479,7 +490,7 @@ impl<P: AIProvider> ContentPlanner<P> {
                 fallback_used: Some(is_fallback),
                 planner_profile_version: PromptBuilder::PLANNER_PROFILE_VERSION,
                 prompt_template_version: PromptBuilder::PROMPT_TEMPLATE_VERSION,
-                generated_at: chrono::Utc::now().to_rfc3339(),
+                generated_at: now_str,
                 usage: resp.usage.unwrap_or_default(),
                 repaired_calls: if repair_count > 0 {
                     Some(repair_count as u32)
@@ -619,6 +630,9 @@ impl<P: AIProvider> ContentPlanner<P> {
 
             plan.revision = base.revision + 1;
             plan.status = PlanStatus::Draft;
+            let now_str = chrono::Utc::now().to_rfc3339();
+            plan.created_at = base.created_at.clone();
+            plan.updated_at = now_str.clone();
 
             let is_fallback = resp.model == FALLBACK_GEMINI_MODEL;
             plan.generation_metadata = Some(GenerationMetadata {
@@ -628,7 +642,7 @@ impl<P: AIProvider> ContentPlanner<P> {
                 fallback_used: Some(is_fallback),
                 planner_profile_version: PromptBuilder::PLANNER_PROFILE_VERSION,
                 prompt_template_version: PromptBuilder::PROMPT_TEMPLATE_VERSION,
-                generated_at: chrono::Utc::now().to_rfc3339(),
+                generated_at: now_str,
                 usage: resp.usage.unwrap_or_default(),
                 repaired_calls: if repair_count > 0 {
                     Some(repair_count as u32)

@@ -147,7 +147,9 @@ pub struct ContentPlan {
     pub scenes: Vec<ContentScene>,
     pub source_refs: Vec<SourceRef>,
     pub generation_metadata: Option<GenerationMetadata>,
+    #[serde(default)]
     pub created_at: String,
+    #[serde(default)]
     pub updated_at: String,
 }
 

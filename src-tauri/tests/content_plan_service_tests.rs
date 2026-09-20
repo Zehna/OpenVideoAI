@@ -639,3 +639,169 @@ fn test_transactional_rollback() {
     let history = service.list_history("cp_1").unwrap();
     assert_eq!(history.len(), 1);
 }
+
+#[test]
+fn test_new_plan_timestamps_are_backend_owned() {
+    let (_dir, db, event_bus, _) = setup_service();
+    let fixed_time = "2026-09-19T12:00:00Z";
+    let fixed_clock = Arc::new(openvideoai_lib::content_planning::service::FixedClock::new(
+        fixed_time,
+    ));
+    let service = ContentPlanService::new(db.clone(), event_bus).with_clock(fixed_clock);
+
+    let mut plan = sample_plan("cp_bogus", "p_1", 1);
+    // Deliberately set bogus/provider-controlled timestamps
+    plan.created_at = "2024-11-20T00:00:00Z".to_string();
+    plan.updated_at = "2024-11-20T00:00:00Z".to_string();
+
+    let sources = vec![sample_source("src_1", "Snapshot 1")];
+    let published = service
+        .publish_generated_revision(
+            "cp_bogus",
+            None,
+            plan,
+            sources,
+            "generate",
+            "system-planner",
+            Some("job_1"),
+        )
+        .unwrap();
+
+    // In-memory returned plan must have backend timestamps
+    assert_eq!(published.created_at, fixed_time);
+    assert_eq!(published.updated_at, fixed_time);
+
+    // Persisted plan must have backend timestamps
+    let current = service.get_plan("cp_bogus").unwrap().unwrap();
+    assert_eq!(current.created_at, fixed_time);
+    assert_eq!(current.updated_at, fixed_time);
+
+    // Summary must have backend timestamps
+    let summaries = service.list_project_plans("p_1", false).unwrap();
+    let summary = summaries.iter().find(|s| s.id == "cp_bogus").unwrap();
+    assert_eq!(summary.created_at, fixed_time);
+    assert_eq!(summary.updated_at, fixed_time);
+}
+
+#[test]
+fn test_new_revision_preserves_created_at_and_updates_updated_at() {
+    let (_dir, db, event_bus, _) = setup_service();
+    let t1 = "2026-09-19T10:00:00Z";
+    let t2 = "2026-09-19T14:30:00Z";
+    let clock = Arc::new(openvideoai_lib::content_planning::service::FixedClock::new(
+        t1,
+    ));
+    let service = ContentPlanService::new(db.clone(), event_bus).with_clock(clock.clone());
+
+    let plan = sample_plan("cp_multi_rev", "p_1", 1);
+    let sources = vec![sample_source("src_1", "Snapshot 1")];
+    let rev1 = service
+        .publish_generated_revision(
+            "cp_multi_rev",
+            None,
+            plan,
+            sources.clone(),
+            "generate",
+            "system-planner",
+            Some("job_1"),
+        )
+        .unwrap();
+    assert_eq!(rev1.created_at, t1);
+    assert_eq!(rev1.updated_at, t1);
+
+    // Advance clock to T2
+    clock.set(t2);
+
+    let mut candidate2 = sample_plan("cp_multi_rev", "p_1", 1);
+    // Bogus candidate timestamps should be completely ignored
+    candidate2.created_at = "1999-01-01T00:00:00Z".to_string();
+    candidate2.updated_at = "1999-01-01T00:00:00Z".to_string();
+
+    let rev2 = service
+        .publish_generated_revision(
+            "cp_multi_rev",
+            Some(1),
+            candidate2,
+            sources,
+            "regenerate",
+            "system-planner",
+            Some("job_2"),
+        )
+        .unwrap();
+
+    assert_eq!(rev2.revision, 2);
+    assert_eq!(rev2.created_at, t1, "Original created_at must be preserved");
+    assert_eq!(
+        rev2.updated_at, t2,
+        "updated_at must be new backend timestamp"
+    );
+
+    let current = service.get_plan("cp_multi_rev").unwrap().unwrap();
+    assert_eq!(current.created_at, t1);
+    assert_eq!(current.updated_at, t2);
+}
+
+#[test]
+fn test_provider_cannot_override_timestamps() {
+    let (_dir, db, event_bus, _) = setup_service();
+    let fixed_time = "2026-09-19T12:00:00Z";
+    let fixed_clock = Arc::new(openvideoai_lib::content_planning::service::FixedClock::new(
+        fixed_time,
+    ));
+    let service = ContentPlanService::new(db.clone(), event_bus).with_clock(fixed_clock);
+
+    // Future timestamp
+    let mut future_plan = sample_plan("cp_future", "p_1", 1);
+    future_plan.created_at = "2099-12-31T23:59:59Z".to_string();
+    future_plan.updated_at = "2099-12-31T23:59:59Z".to_string();
+    let sources = vec![sample_source("src_1", "Snapshot 1")];
+    let published = service
+        .publish_generated_revision(
+            "cp_future",
+            None,
+            future_plan,
+            sources,
+            "generate",
+            "system-planner",
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(published.created_at, fixed_time);
+    assert_eq!(published.updated_at, fixed_time);
+}
+
+#[test]
+fn test_historical_data_with_old_timestamps_remains_readable() {
+    let (_dir, db, _eb, service) = setup_service();
+
+    // Insert historical row directly with ancient 2024 timestamp
+    let ancient_created = "2024-11-20T10:00:00Z";
+    let ancient_updated = "2024-11-20T11:00:00Z";
+    let mut plan = sample_plan("cp_hist", "p_1", 1);
+    plan.created_at = ancient_created.to_string();
+    plan.updated_at = ancient_updated.to_string();
+    let sources = vec![sample_source("src_1", "Snapshot 1")];
+
+    {
+        let mut conn = db.conn().unwrap();
+        let tx = conn.transaction().unwrap();
+        openvideoai_lib::content_planning::repository::ContentPlanRepository::create_initial_tx(
+            &tx,
+            &plan,
+            &sources,
+            "historical_worker",
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
+    // Must still deserialize and read cleanly without errors
+    let retrieved = service
+        .get_plan("cp_hist")
+        .unwrap()
+        .expect("plan must exist");
+    assert_eq!(retrieved.id, "cp_hist");
+    assert_eq!(retrieved.created_at, ancient_created);
+    assert_eq!(retrieved.updated_at, ancient_updated);
+}

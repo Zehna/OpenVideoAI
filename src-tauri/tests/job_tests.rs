@@ -1,4 +1,6 @@
 use openvideoai_lib::db::DbManager;
+use openvideoai_lib::events::bus::EventBus;
+use openvideoai_lib::jobs::manager::JobManager;
 use openvideoai_lib::jobs::model::{JobState, JobSubmission};
 use openvideoai_lib::jobs::repository::JobRepository;
 use std::sync::Arc;
@@ -318,4 +320,169 @@ fn test_job_fail_non_retryable_sets_failed_status() {
     assert!(failed.lease_token.is_none());
     assert!(failed.lease_expires_at.is_none());
     assert!(failed.completed_at.is_some());
+}
+
+#[test]
+fn test_complete_job_clears_stale_retry_error() {
+    let (_dir, db) = setup_test_db();
+    let conn = db.conn().unwrap();
+
+    let job = JobRepository::enqueue(
+        &conn,
+        JobSubmission {
+            job_type: "content.plan".to_string(),
+            payload: "{}".to_string(),
+            payload_version: None,
+            priority: Some(0),
+            idempotency_key: None,
+            project_id: None,
+            max_retries: Some(3),
+        },
+    )
+    .unwrap();
+
+    // Attempt 1 fails with retryable error (e.g. 503)
+    let _lease1 = JobRepository::acquire_lease(&conn, "worker-1", 10).unwrap();
+    let failed = JobRepository::fail_job(
+        &conn,
+        &job.id,
+        "provider_unavailable: HTTP 503 high demand",
+        true,
+    )
+    .unwrap();
+    assert_eq!(failed.status, JobState::Retryable);
+    assert_eq!(failed.retry_count, 1);
+    assert_eq!(
+        failed.error.as_deref(),
+        Some("provider_unavailable: HTTP 503 high demand")
+    );
+
+    // Attempt 2 succeeds
+    let _lease2 = JobRepository::acquire_lease(&conn, "worker-1", 10).unwrap();
+    let completed =
+        JobRepository::complete_job(&conn, &job.id, Some(r#"{"plan":"success"}"#.to_string()))
+            .unwrap();
+
+    assert_eq!(completed.status, JobState::Completed);
+    assert_eq!(completed.result.as_deref(), Some(r#"{"plan":"success"}"#));
+    assert_eq!(
+        completed.retry_count, 1,
+        "retry_count must remain preserved"
+    );
+    assert_eq!(
+        completed.error, None,
+        "Completed job must have cleared stale error"
+    );
+}
+
+#[test]
+fn test_failure_and_dead_letter_preserve_error() {
+    let (_dir, db) = setup_test_db();
+    let conn = db.conn().unwrap();
+
+    // Failed job
+    let job1 = JobRepository::enqueue(
+        &conn,
+        JobSubmission {
+            job_type: "task".to_string(),
+            payload: "{}".to_string(),
+            payload_version: None,
+            priority: Some(0),
+            idempotency_key: None,
+            project_id: None,
+            max_retries: Some(3),
+        },
+    )
+    .unwrap();
+    let _ = JobRepository::acquire_lease(&conn, "worker-1", 10).unwrap();
+    let failed =
+        JobRepository::fail_job(&conn, &job1.id, "fatal non-retryable error", false).unwrap();
+    assert_eq!(failed.status, JobState::Failed);
+    assert_eq!(failed.error.as_deref(), Some("fatal non-retryable error"));
+
+    // Dead letter job
+    let job2 = JobRepository::enqueue(
+        &conn,
+        JobSubmission {
+            job_type: "task".to_string(),
+            payload: "{}".to_string(),
+            payload_version: None,
+            priority: Some(0),
+            idempotency_key: None,
+            project_id: None,
+            max_retries: Some(1),
+        },
+    )
+    .unwrap();
+    let _ = JobRepository::acquire_lease(&conn, "worker-1", 10).unwrap();
+    let _ = JobRepository::fail_job(&conn, &job2.id, "transient error 1", true).unwrap();
+    let _ = JobRepository::acquire_lease(&conn, "worker-1", 10).unwrap();
+    let dead_letter = JobRepository::fail_job(&conn, &job2.id, "transient error 2", true).unwrap();
+    assert_eq!(dead_letter.status, JobState::DeadLetter);
+    assert_eq!(dead_letter.error.as_deref(), Some("transient error 2"));
+}
+
+#[test]
+fn test_retry_history_and_events_preserved_after_eventual_success() {
+    let (_dir, db) = setup_test_db();
+    let event_bus = Arc::new(EventBus::new(db.clone()));
+    let manager = JobManager::with_worker_and_event_bus(
+        db.clone(),
+        event_bus.clone(),
+        "worker-test".to_string(),
+    );
+
+    let _job = manager
+        .submit_job(JobSubmission {
+            job_type: "content.plan".to_string(),
+            payload: "{}".to_string(),
+            payload_version: None,
+            priority: Some(0),
+            idempotency_key: None,
+            project_id: None,
+            max_retries: Some(3),
+        })
+        .unwrap();
+
+    // Attempt 1: fail retryable
+    let l1 = manager.acquire_next_job(10).unwrap().unwrap();
+    let _ = manager
+        .fail_job_with_token(&l1.id, l1.lease_token.as_deref(), "error attempt 1", true)
+        .unwrap();
+
+    // Attempt 2: fail retryable
+    let l2 = manager.acquire_next_job(10).unwrap().unwrap();
+    let _ = manager
+        .fail_job_with_token(&l2.id, l2.lease_token.as_deref(), "error attempt 2", true)
+        .unwrap();
+
+    // Attempt 3: success
+    let l3 = manager.acquire_next_job(10).unwrap().unwrap();
+    let completed = manager
+        .complete_job_with_token(
+            &l3.id,
+            l3.lease_token.as_deref(),
+            Some(r#"{"result":"ok"}"#.to_string()),
+        )
+        .unwrap();
+
+    assert_eq!(completed.status, JobState::Completed);
+    assert_eq!(completed.retry_count, 2);
+    assert_eq!(completed.error, None);
+
+    // Verify events: 2 JobFailed events and 1 JobCompleted event exist
+    let failed_events = event_bus.list_events(Some("JobFailed"), None, 10).unwrap();
+    assert_eq!(
+        failed_events.len(),
+        2,
+        "Historical JobFailed events must remain in event store"
+    );
+    let completed_events = event_bus
+        .list_events(Some("JobCompleted"), None, 10)
+        .unwrap();
+    assert_eq!(
+        completed_events.len(),
+        1,
+        "JobCompleted event must be recorded"
+    );
 }

@@ -1259,6 +1259,14 @@ fn test_worker_fallback_flow_primary_503_then_fallback_success() {
 
     let final_job = job_mgr.get_job(&job.id).unwrap().unwrap();
     assert_eq!(final_job.status, JobState::Completed);
+    assert_eq!(
+        final_job.error, None,
+        "Completed job must have cleared stale error"
+    );
+    assert_eq!(
+        final_job.retry_count, 3,
+        "Retry count must be preserved as history"
+    );
 
     // Verify metadata on generated plan revision
     let plans = plan_service.list_project_plans("proj-1", false).unwrap();
