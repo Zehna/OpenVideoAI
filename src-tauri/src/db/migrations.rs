@@ -203,6 +203,59 @@ pub static MIGRATIONS: &[Migration] = &[
             CREATE INDEX IF NOT EXISTS idx_timeline_history_timeline_index ON timeline_history(timeline_id, history_index);
         ",
     },
+    Migration {
+        version: 6,
+        name: "ai_content_planning",
+        sql: "
+            CREATE TABLE IF NOT EXISTS content_plans (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                title TEXT NOT NULL,
+                current_revision INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'draft',
+                approved_revision INTEGER,
+                approved_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS content_plan_revisions (
+                plan_id TEXT NOT NULL REFERENCES content_plans(id) ON DELETE CASCADE,
+                revision INTEGER NOT NULL,
+                parent_revision INTEGER,
+                operation_type TEXT NOT NULL,
+                content_json TEXT NOT NULL,
+                generation_metadata_json TEXT,
+                created_by TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(plan_id, revision)
+            );
+
+            CREATE TABLE IF NOT EXISTS content_plan_sources (
+                plan_id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                source_id TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                author TEXT,
+                url TEXT,
+                published_at TEXT,
+                locator TEXT,
+                content_snapshot TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(plan_id, revision, source_id),
+                FOREIGN KEY(plan_id, revision)
+                    REFERENCES content_plan_revisions(plan_id, revision)
+                    ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_content_plans_project ON content_plans(project_id);
+            CREATE INDEX IF NOT EXISTS idx_content_plan_revisions_plan_revision ON content_plan_revisions(plan_id, revision);
+            CREATE INDEX IF NOT EXISTS idx_content_plan_sources_plan_revision ON content_plan_sources(plan_id, revision);
+            CREATE INDEX IF NOT EXISTS idx_content_plan_sources_plan_source ON content_plan_sources(plan_id, source_id);
+        ",
+    },
 ];
 
 pub fn run_all_migrations(conn: &mut Connection) -> Result<(), rusqlite::Error> {

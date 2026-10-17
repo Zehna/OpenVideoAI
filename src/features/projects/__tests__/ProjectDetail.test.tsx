@@ -78,4 +78,25 @@ describe('ProjectDetail Component', () => {
       { timeout: 2000 }
     );
   });
+
+  it('renders AI Planner button and calls onOpenPlanner when clicked', async () => {
+    const onOpenPlanner = vi.fn();
+    render(
+      <ProjectDetail
+        project={mockProject}
+        onBack={vi.fn()}
+        onProjectUpdated={vi.fn()}
+        onOpenPlanner={onOpenPlanner}
+      />
+    );
+
+    await waitFor(() => {
+      expect(artifactApi.listProjectArtifacts).toHaveBeenCalledWith('proj-123');
+    });
+
+    const plannerBtn = screen.getByRole('button', { name: /ai planner/i });
+    expect(plannerBtn).toBeInTheDocument();
+    fireEvent.click(plannerBtn);
+    expect(onOpenPlanner).toHaveBeenCalledTimes(1);
+  });
 });

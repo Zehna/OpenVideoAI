@@ -13,6 +13,7 @@ interface ProjectDetailProps {
   onBack: () => void;
   onProjectUpdated: (updated: Project) => void;
   onOpenEditor?: () => void;
+  onOpenPlanner?: () => void;
 }
 
 export const ProjectDetail: React.FC<ProjectDetailProps> = ({
@@ -20,6 +21,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
   onBack,
   onProjectUpdated,
   onOpenEditor,
+  onOpenPlanner,
 }) => {
   const [name, setName] = useState(project.name);
   const [description, setDescription] = useState(project.description || '');
@@ -85,7 +87,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
       <div className="flex items-center justify-between border-b border-gray-800 pb-4">
         <div className="flex items-center gap-3">
           <Button variant="secondary" onClick={onBack} className="text-xs px-3 py-1.5">
-            ? Back to Projects
+            ← Back to Projects
           </Button>
           <div className="text-xs font-mono text-gray-500">
             ID: <span className="text-gray-400">{project.id}</span>
@@ -107,6 +109,11 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
               </span>
             )}
           </div>
+          {onOpenPlanner && (
+            <Button onClick={onOpenPlanner} variant="secondary">
+              AI Planner
+            </Button>
+          )}
           {onOpenEditor && (
             <Button onClick={onOpenEditor} variant="secondary">
               Open Timeline Editor

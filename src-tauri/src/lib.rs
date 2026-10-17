@@ -1,4 +1,5 @@
 pub mod artifacts;
+pub mod content_planning;
 pub mod db;
 pub mod events;
 pub mod health;
@@ -20,6 +21,7 @@ pub struct AppState {
     pub artifact_resolver: Arc<artifacts::resolver::ArtifactResolver>,
     pub job_manager: Arc<jobs::manager::JobManager>,
     pub event_bus: Arc<events::bus::EventBus>,
+    pub content_plan_service: Arc<content_planning::service::ContentPlanService>,
 }
 
 #[tauri::command]
@@ -128,6 +130,26 @@ pub fn run() {
                 false,
             );
 
+            // Start background content plan worker for content.plan jobs
+            let content_plan_service =
+                Arc::new(content_planning::service::ContentPlanService::new(
+                    db_manager.clone(),
+                    event_bus.clone(),
+                ));
+            let provider = Arc::new(content_planning::provider::DynamicGeminiProvider::new());
+            let planner = Arc::new(content_planning::planner::ContentPlanner::new(provider));
+            let _content_plan_worker_handle =
+                content_planning::worker::start_local_content_plan_worker(
+                    format!(
+                        "content-plan-worker-{}",
+                        &uuid::Uuid::new_v4().to_string()[..8]
+                    ),
+                    job_manager.clone(),
+                    planner,
+                    content_plan_service.clone(),
+                    std::time::Duration::from_millis(500),
+                );
+
             // Bridge domain events to frontend webview
             let app_handle = app.handle().clone();
             event_bus.subscribe(Arc::new(move |evt| {
@@ -143,6 +165,7 @@ pub fn run() {
                 artifact_resolver,
                 job_manager,
                 event_bus,
+                content_plan_service,
             });
 
             Ok(())
@@ -179,6 +202,16 @@ pub fn run() {
             cmd_redo_timeline,
             cmd_build_render_spec,
             cmd_submit_timeline_render,
+            content_planning::commands::submit_content_plan_job,
+            content_planning::commands::get_content_plan,
+            content_planning::commands::list_project_content_plans,
+            content_planning::commands::save_content_plan_revision,
+            content_planning::commands::submit_content_plan_regeneration,
+            content_planning::commands::approve_content_plan,
+            content_planning::commands::archive_content_plan,
+            content_planning::commands::get_content_plan_history,
+            content_planning::commands::get_content_plan_revision,
+            content_planning::commands::get_planner_provider_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

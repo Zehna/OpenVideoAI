@@ -68,7 +68,7 @@ fn test_migration_3_schema_and_foreign_keys() {
 
     assert_eq!(
         db_manager.get_migration_count().expect("migration count"),
-        5
+        6
     );
 
     let conn = db_manager.conn().expect("conn failed");
@@ -198,8 +198,8 @@ fn test_migration_3_to_4_upgrade_regression() {
 
     assert_eq!(
         db_manager.get_migration_count().expect("migration count"),
-        5,
-        "Expected all 5 migrations applied after upgrade"
+        6,
+        "Expected all 6 migrations applied after upgrade"
     );
 
     let conn = db_manager.conn().expect("get conn");
@@ -439,8 +439,8 @@ fn test_migration_5_applies_cleanly_over_migration_4() {
 
     assert_eq!(
         db_manager.get_migration_count().expect("migration count"),
-        5,
-        "Expected all 5 migrations to be applied"
+        6,
+        "Expected all 6 migrations to be applied"
     );
 
     let conn = db_manager.conn().expect("conn failed");
@@ -685,11 +685,11 @@ fn test_migration_4_to_5_upgrade_regression() {
         .run_migrations()
         .expect("Migration 5 must apply cleanly over Migration 4");
 
-    // 3. Verify migration count is now 5
+    // 3. Verify migration count is now 6
     assert_eq!(
         db_manager.get_migration_count().expect("migration count"),
-        5,
-        "Migration count must be exactly 5 after upgrade"
+        6,
+        "Migration count must be exactly 6 after upgrade"
     );
 
     let conn = db_manager.conn().expect("get conn");
@@ -768,4 +768,445 @@ fn test_migration_4_to_5_upgrade_regression() {
          VALUES ('cl-new-1', 'tr-new-1', 'art-upgrade-1', 0, 3000, 0, 1.0, 0, 0.0, 0.0, 1.0, 0.0, 1.0);",
         [],
     ).expect("insert clip referencing existing artifact");
+}
+
+#[test]
+fn test_migration_6_schema_and_revision_scoped_sources() {
+    let dir = tempdir().expect("failed to create tempdir");
+    let db_path = dir.path().join("test_migration_6.db");
+
+    let db_manager = DbManager::new(db_path).expect("failed to initialize db");
+    db_manager.run_migrations().expect("migrations failed");
+
+    let conn = db_manager.conn().expect("conn failed");
+
+    // 1. Verify tables content_plans, content_plan_revisions, content_plan_sources exist
+    let tables: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+
+    assert!(
+        tables.contains(&"content_plans".to_string()),
+        "content_plans table missing"
+    );
+    assert!(
+        tables.contains(&"content_plan_revisions".to_string()),
+        "content_plan_revisions table missing"
+    );
+    assert!(
+        tables.contains(&"content_plan_sources".to_string()),
+        "content_plan_sources table missing"
+    );
+
+    // 2. Insert project and content plan with title 'Plan'
+    conn.execute(
+        "INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p1', 'Plan Project', datetime('now'), datetime('now'));",
+        [],
+    ).expect("insert project");
+
+    conn.execute(
+        "INSERT INTO content_plans (id, project_id, title, current_revision, status, created_at, updated_at)
+         VALUES ('cp1', 'p1', 'Plan', 1, 'draft', datetime('now'), datetime('now'));",
+        [],
+    ).expect("insert content plan");
+
+    // 3. Insert revision 1 and source 'src_1' at revision 1
+    conn.execute(
+        "INSERT INTO content_plan_revisions (plan_id, revision, parent_revision, operation_type, content_json, generation_metadata_json, created_by, created_at)
+         VALUES ('cp1', 1, NULL, 'generate', '{\"title\":\"Plan v1\"}', NULL, 'ai', datetime('now'));",
+        [],
+    ).expect("insert revision 1");
+
+    conn.execute(
+        "INSERT INTO content_plan_sources (plan_id, revision, source_id, source_type, title, author, url, published_at, locator, content_snapshot, content_hash, created_at)
+         VALUES ('cp1', 1, 'src_1', 'text', 'Source 1', 'Author A', 'https://example.com/1', '2026-09-12', 'loc-1', 'v1', 'hash_v1', datetime('now'));",
+        [],
+    ).expect("insert source 1 rev 1");
+
+    // 4. Insert revision 2 with parent_revision = 1 and source 'src_1' at revision 2 with updated snapshot 'v2'
+    conn.execute(
+        "INSERT INTO content_plan_revisions (plan_id, revision, parent_revision, operation_type, content_json, generation_metadata_json, created_by, created_at)
+         VALUES ('cp1', 2, 1, 'manual_edit', '{\"title\":\"Plan v2\"}', NULL, 'user', datetime('now'));",
+        [],
+    ).expect("insert revision 2");
+
+    conn.execute(
+        "INSERT INTO content_plan_sources (plan_id, revision, source_id, source_type, title, author, url, published_at, locator, content_snapshot, content_hash, created_at)
+         VALUES ('cp1', 2, 'src_1', 'text', 'Source 1 Updated', 'Author A', 'https://example.com/1', '2026-09-12', 'loc-1', 'v2', 'hash_v2', datetime('now'));",
+        [],
+    ).expect("insert source 1 rev 2");
+
+    // 5. Assert both source rows exist simultaneously (revision = 1 with snapshot 'v1', revision = 2 with snapshot 'v2')
+    let snap_v1: String = conn.query_row(
+        "SELECT content_snapshot FROM content_plan_sources WHERE plan_id = 'cp1' AND revision = 1 AND source_id = 'src_1';",
+        [],
+        |r| r.get(0),
+    ).expect("query rev 1 source snapshot");
+    assert_eq!(snap_v1, "v1");
+
+    let snap_v2: String = conn.query_row(
+        "SELECT content_snapshot FROM content_plan_sources WHERE plan_id = 'cp1' AND revision = 2 AND source_id = 'src_1';",
+        [],
+        |r| r.get(0),
+    ).expect("query rev 2 source snapshot");
+    assert_eq!(snap_v2, "v2");
+
+    let total_sources: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM content_plan_sources WHERE plan_id = 'cp1';",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count sources");
+    assert_eq!(
+        total_sources, 2,
+        "Both revision-scoped sources must exist simultaneously"
+    );
+
+    // 6. Assert deleting revision 2 cascades only revision 2 source, leaving revision 1 intact
+    conn.execute(
+        "DELETE FROM content_plan_revisions WHERE plan_id = 'cp1' AND revision = 2;",
+        [],
+    )
+    .expect("delete revision 2");
+
+    let rev2_count: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM content_plan_sources WHERE plan_id = 'cp1' AND revision = 2;",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count rev 2 sources");
+    assert_eq!(rev2_count, 0, "Revision 2 source must be cascade deleted");
+
+    let rev1_count: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM content_plan_sources WHERE plan_id = 'cp1' AND revision = 1;",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count rev 1 sources");
+    assert_eq!(rev1_count, 1, "Revision 1 source must remain intact");
+
+    let snap_v1_after: String = conn.query_row(
+        "SELECT content_snapshot FROM content_plan_sources WHERE plan_id = 'cp1' AND revision = 1 AND source_id = 'src_1';",
+        [],
+        |r| r.get(0),
+    ).expect("query rev 1 source snapshot after delete");
+    assert_eq!(snap_v1_after, "v1");
+
+    // 7. Verify deleting content plan cascades to revisions and sources
+    conn.execute("DELETE FROM content_plans WHERE id = 'cp1';", [])
+        .expect("delete content plan");
+    let remaining_revs: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM content_plan_revisions WHERE plan_id = 'cp1';",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count remaining revs");
+    assert_eq!(remaining_revs, 0);
+    let remaining_sources: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM content_plan_sources WHERE plan_id = 'cp1';",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count remaining sources");
+    assert_eq!(remaining_sources, 0);
+}
+
+#[test]
+fn test_migration_5_to_6_upgrade_regression() {
+    let dir = tempdir().expect("failed to create tempdir");
+    let db_path = dir.path().join("pre_migration_6_upgrade.db");
+
+    // 1. Fixture a real v0.4.0 / Migration-5 database with pre-existing rows
+    {
+        let raw_conn = rusqlite::Connection::open(&db_path).expect("open raw db");
+        raw_conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+
+             CREATE TABLE _migrations (
+                 id INTEGER PRIMARY KEY,
+                 version INTEGER UNIQUE NOT NULL,
+                 name TEXT NOT NULL,
+                 applied_at TEXT NOT NULL
+             );
+             INSERT INTO _migrations (version, name, applied_at) VALUES (1, 'initial_foundation_schema', datetime('now'));
+             INSERT INTO _migrations (version, name, applied_at) VALUES (2, 'project_and_artifact_core', datetime('now'));
+             INSERT INTO _migrations (version, name, applied_at) VALUES (3, 'durable_jobs_and_events', datetime('now'));
+             INSERT INTO _migrations (version, name, applied_at) VALUES (4, 'jobs_durability_and_concurrency_audit', datetime('now'));
+             INSERT INTO _migrations (version, name, applied_at) VALUES (5, 'media_and_timeline_core', datetime('now'));
+
+             CREATE TABLE app_metadata (
+                 key TEXT PRIMARY KEY,
+                 value TEXT NOT NULL
+             );
+             INSERT INTO app_metadata (key, value) VALUES ('initialized_at', '2026-09-08T10:00:00Z');
+
+             CREATE TABLE projects (
+                 id TEXT PRIMARY KEY,
+                 name TEXT NOT NULL,
+                 description TEXT,
+                 created_at TEXT NOT NULL,
+                 updated_at TEXT NOT NULL
+             );
+             INSERT INTO projects (id, name, description, created_at, updated_at)
+             VALUES ('proj-upgrade-5to6', 'Existing Project v0.4.0', 'Pre-existing Phase 0-3 project', '2026-09-10T10:00:00Z', '2026-09-10T10:00:00Z');
+
+             CREATE TABLE artifacts (
+                 id TEXT PRIMARY KEY,
+                 sha256 TEXT NOT NULL UNIQUE,
+                 kind TEXT NOT NULL,
+                 mime_type TEXT,
+                 size_bytes INTEGER NOT NULL,
+                 storage_key TEXT NOT NULL UNIQUE,
+                 original_filename TEXT NOT NULL,
+                 created_at TEXT NOT NULL
+             );
+             INSERT INTO artifacts (id, sha256, kind, mime_type, size_bytes, storage_key, original_filename, created_at)
+             VALUES ('art-upgrade-5to6', 'sha256-hash-5to6', 'video', 'video/mp4', 4096, 'existing_5to6.mp4', 'existing_5to6.mp4', '2026-09-10T10:00:00Z');
+
+             CREATE TABLE artifact_media_metadata (
+                 artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+                 probe_status TEXT NOT NULL,
+                 duration_ms INTEGER,
+                 width INTEGER,
+                 height INTEGER,
+                 video_codec TEXT,
+                 audio_codec TEXT,
+                 frame_rate REAL,
+                 sample_rate INTEGER,
+                 channels INTEGER,
+                 probe_error TEXT
+             );
+             INSERT INTO artifact_media_metadata (artifact_id, probe_status, duration_ms, width, height, video_codec, audio_codec, frame_rate, sample_rate, channels)
+             VALUES ('art-upgrade-5to6', 'ready', 8000, 1920, 1080, 'h264', 'aac', 30.0, 48000, 2);
+
+             CREATE TABLE project_artifacts (
+                 project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                 artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+                 added_at TEXT NOT NULL,
+                 PRIMARY KEY(project_id, artifact_id)
+             );
+             INSERT INTO project_artifacts (project_id, artifact_id, added_at)
+             VALUES ('proj-upgrade-5to6', 'art-upgrade-5to6', '2026-09-10T10:00:00Z');
+
+             CREATE TABLE jobs (
+                 id TEXT PRIMARY KEY,
+                 job_type TEXT NOT NULL,
+                 status TEXT NOT NULL,
+                 priority INTEGER NOT NULL DEFAULT 0,
+                 idempotency_key TEXT UNIQUE,
+                 project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+                 payload TEXT NOT NULL,
+                 result TEXT,
+                 error TEXT,
+                 retry_count INTEGER NOT NULL DEFAULT 0,
+                 max_retries INTEGER NOT NULL DEFAULT 3,
+                 leased_by TEXT,
+                 lease_expires_at TEXT,
+                 created_at TEXT NOT NULL,
+                 updated_at TEXT NOT NULL,
+                 started_at TEXT,
+                 completed_at TEXT,
+                 payload_version INTEGER NOT NULL DEFAULT 1,
+                 lease_token TEXT
+             );
+             CREATE UNIQUE INDEX idx_jobs_idempotency_key ON jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
+             INSERT INTO jobs (id, job_type, status, priority, idempotency_key, project_id, payload, payload_version, lease_token, created_at, updated_at)
+             VALUES ('job-upgrade-5to6', 'render.timeline', 'completed', 5, 'idemp-5to6', 'proj-upgrade-5to6', '{\"v\":1}', 1, 'lease-5to6', '2026-09-10T10:00:00Z', '2026-09-10T10:00:00Z');
+
+             CREATE TABLE job_checkpoints (
+                 id TEXT PRIMARY KEY,
+                 job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                 stage TEXT NOT NULL,
+                 checkpoint_data TEXT NOT NULL,
+                 created_at TEXT NOT NULL
+             );
+             INSERT INTO job_checkpoints (id, job_id, stage, checkpoint_data, created_at)
+             VALUES ('cp-upgrade-5to6', 'job-upgrade-5to6', 'render_pass', '{\"progress\":100}', '2026-09-10T10:00:00Z');
+
+             CREATE TABLE domain_events (
+                 id TEXT PRIMARY KEY,
+                 event_type TEXT NOT NULL,
+                 version INTEGER NOT NULL DEFAULT 1,
+                 project_id TEXT,
+                 job_id TEXT,
+                 payload TEXT NOT NULL,
+                 created_at TEXT NOT NULL
+             );
+             INSERT INTO domain_events (id, event_type, version, project_id, job_id, payload, created_at)
+             VALUES ('ev-upgrade-5to6', 'render_completed', 1, 'proj-upgrade-5to6', 'job-upgrade-5to6', '{\"status\":\"ok\"}', '2026-09-10T10:00:00Z');
+
+             CREATE TABLE timelines (
+                 id TEXT PRIMARY KEY,
+                 project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                 name TEXT NOT NULL,
+                 revision INTEGER NOT NULL DEFAULT 1,
+                 width INTEGER NOT NULL,
+                 height INTEGER NOT NULL,
+                 frame_rate REAL NOT NULL,
+                 history_cursor INTEGER NOT NULL DEFAULT 0,
+                 created_at TEXT NOT NULL,
+                 updated_at TEXT NOT NULL
+             );
+             INSERT INTO timelines (id, project_id, name, revision, width, height, frame_rate, history_cursor, created_at, updated_at)
+             VALUES ('tl-upgrade-5to6', 'proj-upgrade-5to6', 'Timeline v0.4.0', 1, 1920, 1080, 30.0, 0, '2026-09-10T10:00:00Z', '2026-09-10T10:00:00Z');
+
+             CREATE TABLE timeline_tracks (
+                 id TEXT PRIMARY KEY,
+                 timeline_id TEXT NOT NULL REFERENCES timelines(id) ON DELETE CASCADE,
+                 kind TEXT NOT NULL,
+                 order_index INTEGER NOT NULL,
+                 name TEXT NOT NULL,
+                 muted INTEGER NOT NULL DEFAULT 0,
+                 UNIQUE(timeline_id, order_index)
+             );
+             INSERT INTO timeline_tracks (id, timeline_id, kind, order_index, name, muted)
+             VALUES ('tr-upgrade-5to6', 'tl-upgrade-5to6', 'video', 0, 'V1', 0);
+
+             CREATE TABLE timeline_clips (
+                 id TEXT PRIMARY KEY,
+                 track_id TEXT NOT NULL REFERENCES timeline_tracks(id) ON DELETE CASCADE,
+                 artifact_id TEXT NOT NULL REFERENCES artifacts(id),
+                 source_in_ms INTEGER NOT NULL,
+                 source_out_ms INTEGER NOT NULL,
+                 timeline_start_ms INTEGER NOT NULL,
+                 volume REAL NOT NULL DEFAULT 1.0,
+                 muted INTEGER NOT NULL DEFAULT 0,
+                 position_x REAL NOT NULL DEFAULT 0.0,
+                 position_y REAL NOT NULL DEFAULT 0.0,
+                 scale REAL NOT NULL DEFAULT 1.0,
+                 rotation_deg REAL NOT NULL DEFAULT 0.0,
+                 opacity REAL NOT NULL DEFAULT 1.0
+             );
+             INSERT INTO timeline_clips (id, track_id, artifact_id, source_in_ms, source_out_ms, timeline_start_ms)
+             VALUES ('cl-upgrade-5to6', 'tr-upgrade-5to6', 'art-upgrade-5to6', 0, 5000, 0);
+
+             CREATE TABLE timeline_history (
+                 timeline_id TEXT NOT NULL REFERENCES timelines(id) ON DELETE CASCADE,
+                 history_index INTEGER NOT NULL,
+                 snapshot_json TEXT NOT NULL,
+                 operation_type TEXT NOT NULL,
+                 created_at TEXT NOT NULL,
+                 PRIMARY KEY(timeline_id, history_index)
+             );
+             INSERT INTO timeline_history (timeline_id, history_index, snapshot_json, operation_type, created_at)
+             VALUES ('tl-upgrade-5to6', 0, '{\"revision\":1}', 'init', '2026-09-10T10:00:00Z');
+            ",
+        ).expect("fixture v0.4.0 Migration-5 database");
+    }
+
+    // 2. Run current migration engine on pre-existing database
+    let db_manager = DbManager::new(db_path).expect("initialize DbManager over existing db");
+    db_manager
+        .run_migrations()
+        .expect("Migration 6 must apply cleanly over Migration 5");
+
+    // 3. Verify migration count is now 6
+    assert_eq!(
+        db_manager.get_migration_count().expect("migration count"),
+        6,
+        "Migration count must be exactly 6 after upgrade"
+    );
+
+    let conn = db_manager.conn().expect("get conn");
+
+    // 4. Verify ZERO data loss on existing v0.4.0 entities
+    let proj_name: String = conn
+        .query_row(
+            "SELECT name FROM projects WHERE id = 'proj-upgrade-5to6'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(proj_name, "Existing Project v0.4.0");
+
+    let art_key: String = conn
+        .query_row(
+            "SELECT storage_key FROM artifacts WHERE id = 'art-upgrade-5to6'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(art_key, "existing_5to6.mp4");
+
+    let meta_status: String = conn
+        .query_row(
+            "SELECT probe_status FROM artifact_media_metadata WHERE artifact_id = 'art-upgrade-5to6'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(meta_status, "ready");
+
+    let job_token: String = conn
+        .query_row(
+            "SELECT lease_token FROM jobs WHERE id = 'job-upgrade-5to6'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(job_token, "lease-5to6");
+
+    let cp_stage: String = conn
+        .query_row(
+            "SELECT stage FROM job_checkpoints WHERE id = 'cp-upgrade-5to6'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(cp_stage, "render_pass");
+
+    let ev_type: String = conn
+        .query_row(
+            "SELECT event_type FROM domain_events WHERE id = 'ev-upgrade-5to6'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(ev_type, "render_completed");
+
+    let tl_name: String = conn
+        .query_row(
+            "SELECT name FROM timelines WHERE id = 'tl-upgrade-5to6'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(tl_name, "Timeline v0.4.0");
+
+    let clip_count: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM timeline_clips WHERE id = 'cl-upgrade-5to6'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(clip_count, 1);
+
+    // 5. Verify Phase 4 tables are present and functional, linking to existing project
+    conn.execute(
+        "INSERT INTO content_plans (id, project_id, title, current_revision, status, created_at, updated_at)
+         VALUES ('cp-upgrade-1', 'proj-upgrade-5to6', 'Plan for Existing Project', 1, 'draft', datetime('now'), datetime('now'));",
+        [],
+    ).expect("insert content plan referencing existing project");
+
+    conn.execute(
+        "INSERT INTO content_plan_revisions (plan_id, revision, operation_type, content_json, created_by, created_at)
+         VALUES ('cp-upgrade-1', 1, 'generate', '{\"scenes\":[]}', 'ai', datetime('now'));",
+        [],
+    ).expect("insert revision");
+
+    conn.execute(
+        "INSERT INTO content_plan_sources (plan_id, revision, source_id, source_type, title, content_snapshot, content_hash, created_at)
+         VALUES ('cp-upgrade-1', 1, 'src-upgrade-1', 'document', 'Source Ref', 'snapshot content', 'hash-1', datetime('now'));",
+        [],
+    ).expect("insert source");
 }
